@@ -54,6 +54,19 @@ describe("backup and restore", () => {
     const b = fs.readFileSync(file); b[Math.floor(b.length / 2)] ^= 0xff; fs.writeFileSync(file, b);
     expect(() => { const r = verifyBackup(file); if (!r.ok) throw new Error(r.problems.join(";")); }).toThrow();
   });
+  it("backs up and restores a database from before logins existed (no users table), and old backups that recorded 0 users", () => {
+    const w = world();
+    w.db.exec("DROP TABLE users"); // an older database
+    const { file, manifest } = createBackup(w.p, { outDir: w.out });
+    expect(manifest.counts.users).toBeUndefined();
+    expect(verifyBackup(file)).toMatchObject({ ok: true });
+    w.db.close();
+    const dest = { ...w.p, dbPath: path.join(w.root, "elsewhere", "research.sqlite") };
+    expect(restoreBackup(file, dest, {}).counts.evidence).toBe(1);
+    const db = openDb(dest.dbPath); // opening migrates it to the current version
+    expect((db.prepare("SELECT COUNT(*) n FROM users").get() as any).n).toBe(0);
+    expect((db.prepare("SELECT COUNT(*) n FROM evidence_fts WHERE evidence_fts MATCH 'delivery'").get() as any).n).toBe(1);
+  });
   it("keeps only the newest N backups", () => {
     const w = world();
     for (let i = 0; i < 4; i++) createBackup(w.p, { outDir: w.out, keep: 2, now: new Date(Date.UTC(2026, 10, 1 + i)) });

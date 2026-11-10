@@ -41,8 +41,10 @@ export function createBackup(p: BackupPaths, o: { outDir: string; passphrase?: s
     if (fs.existsSync(p.termsPath)) fs.copyFileSync(p.termsPath, path.join(stage, "redaction-terms.json"));
     for (const f of walk(p.assetsDir)) { const to = path.join(stage, "assessments", f); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(path.join(p.assetsDir, f), to); }
     const snap = new DatabaseSync(path.join(stage, "research.sqlite"), { readOnly: true });
-    const count = (t: string) => { try { return (snap.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n; } catch { return 0; } };
-    const counts = Object.fromEntries(["sources", "participants", "evidence", "users", "answers"].map((t) => [t, count(t)]));
+    const counts: Record<string, number> = {};
+    for (const t of ["sources", "participants", "evidence", "users", "answers"]) {
+      try { counts[t] = (snap.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n; } catch { /* an older database may not have this table yet */ }
+    }
     snap.close();
     const files = walk(stage).map((f) => ({ path: f.split(path.sep).join("/"), sha256: sha256(path.join(stage, f)), bytes: fs.statSync(path.join(stage, f)).size }));
     const manifest: Manifest = { version: 1, createdAt: (o.now ?? new Date()).toISOString(), files, counts };
@@ -89,7 +91,10 @@ export function verifyBackup(archive: string, passphrase?: string): { ok: boolea
         if (ic !== "ok") problems.push(`database integrity check: ${ic}`);
         if (db.prepare("PRAGMA foreign_key_check").all().length) problems.push("foreign key problems in the database");
         try { db.prepare("SELECT COUNT(*) n FROM evidence_fts WHERE evidence_fts MATCH 'a OR the OR delivery'").get(); } catch { problems.push("the search index could not be read"); }
-        for (const [t, n] of Object.entries(manifest.counts)) { try { const got = (db.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n; if (got !== n) problems.push(`${t}: expected ${n} rows, found ${got}`); } catch { problems.push(`table ${t} unreadable`); } }
+        for (const [t, n] of Object.entries(manifest.counts)) {
+          try { const got = (db.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n; if (got !== n) problems.push(`${t}: expected ${n} rows, found ${got}`); }
+          catch { if (n !== 0) problems.push(`table ${t} unreadable`); } // a table that is absent and was recorded as 0 rows (older backups) is fine
+        }
       } finally { db.close(); }
     } else problems.push("the backup has no database");
     return { ok: problems.length === 0, problems, counts: manifest.counts };
