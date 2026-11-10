@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { audit, type Db } from "../db";
 import type { AiProvider } from "./provider";
-import { ftsQuery, searchEvidence, type Hit } from "../search";
+import { ftsQuery } from "../search";
+import { evidenceLines, gatherEvidence, overviewNote, searchScope, stripEvidenceMarkers } from "../retrieve";
 import type { ChatMessage, ClaimLabel } from "../../src/types/research";
 
 const SYS = `You write a short reply as a PERSON WHO MATCHES a research-derived persona, answering a product team's question. This is a simulation of a behavioural pattern, NOT a real individual.
@@ -13,11 +14,9 @@ Hard rules:
 - If the evidence does not address the question, set label "no_evidence", say plainly in first person that nothing in the research tells you, and fill suggested_study with one sentence on what to ask real users. A "no_evidence" reply contains ONLY that statement: add no other claims, no related findings, and no evidence_ids.
 - Mirror the language of the user's message: if they write Hinglish or Hindi use light Roman-script Hinglish, otherwise English. 1 to 4 sentences.
 - label: "evidence" when the reply rests directly on the cited evidence; "inference" when you go beyond it (then say so in the reply, e.g. "I'd guess...").
-- evidence_ids: the numbers you relied on, from the list ONLY.`;
+- Items marked [overview] are a general sample of the persona's research: for broad questions ("how do you usually shop?") speak from the recurring themes they show; for a specific question they do not address, they are not evidence.
+- evidence_ids: the numbers you relied on, from the list ONLY. Never write evidence numbers inside the reply text.`;
 const SCHEMA = { type: "OBJECT", properties: { reply: { type: "STRING" }, label: { type: "STRING", enum: ["evidence", "inference", "no_evidence"] }, evidence_ids: { type: "ARRAY", items: { type: "INTEGER" } }, suggested_study: { type: "STRING" } }, required: ["reply", "label", "evidence_ids"] };
-const SYS_INTENT = `You prepare a search over a user-research evidence store (Hindi, Hinglish and English; online shopping in India). Return 8-16 short search keywords/phrases: English AND likely Hinglish words for what the message is about. If the message is a short follow-up (like "why?"), use the earlier message for context.`;
-const SCHEMA_INTENT = { type: "OBJECT", properties: { keywords: { type: "ARRAY", items: { type: "STRING" } } }, required: ["keywords"] };
-
 export type PersonaRow = { id: string; name: string; description: string };
 type Raw = { reply: string; label: ClaimLabel; evidence_ids: number[]; suggested_study?: string };
 const MIN_PARTICIPANTS = 3;
@@ -62,11 +61,12 @@ export async function chatWithPersona(db: Db, ai: AiProvider, o: { userId: strin
   };
   save("user", o.text);
 
-  const intent = await ai.generateJson<{ keywords: string[] }>({ system: SYS_INTENT, schema: SCHEMA_INTENT, prompt: `${lastUser ? `Earlier message: ${lastUser}\n` : ""}Message: ${o.text}` });
-  const own = [o.text, ...(intent.keywords ?? [])];
-  const hits: Hit[] = searchEvidence(db, { terms: ftsQuery(own) ? own : [lastUser ?? ""], participants: members, statuses, limit: 25 });
+  const sc = await searchScope(db, ai, o.text, lastUser ? `Earlier message: ${lastUser}\n` : "");
+  const gathered = gatherEvidence(db, { scope: { ...sc, terms: ftsQuery(sc.terms) ? sc.terms : [lastUser ?? ""] }, participants: members, statuses, limit: 25 });
+  const hits = gathered.hits;
 
-  const reply = (text: string, label: ClaimLabel, ids: string[], study?: string): ChatMessage => {
+  const reply = (rawText: string, label: ClaimLabel, ids: string[], study?: string): ChatMessage => {
+    const text = stripEvidenceMarkers(rawText);
     const id = save("persona", text, { label, evidenceIds: ids, ...(study ? { study } : {}) });
     audit(db, "persona_chat", { persona: o.persona.id, by: o.userId, label, cited: ids.length });
     return { id, from: "persona", text, label, evidenceIds: ids, ...(study ? { suggestedStudy: study } : {}) };
@@ -78,8 +78,7 @@ export async function chatWithPersona(db: Db, ai: AiProvider, o: { userId: strin
   const byId = new Map(hits.map((h) => [h.id, h]));
   const raw = await ai.generateJson<Raw>({ system: SYS, schema: SCHEMA,
     prompt: `Persona: ${o.persona.name}. ${o.persona.description}\nProfile (research-derived):\n${traits.map((t) => `- [${t.t}] ${t.text}`).join("\n") || "(none)"}\n\n` +
-      `Conversation so far:\n${history.map((m) => `${m.from === "user" ? "Team" : "Persona"}: ${m.text}`).join("\n") || "(start)"}\n\nQuestion from the team: ${o.text}\n\nEvidence:\n` +
-      hits.map((h) => `#${h.id} (${h.participantId}, ${h.kind}) ${h.translation ?? h.quote}`).join("\n") });
+      `Conversation so far:\n${history.map((m) => `${m.from === "user" ? "Team" : "Persona"}: ${m.text}`).join("\n") || "(start)"}\n\nQuestion from the team: ${o.text}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` });
 
   const ids = [...new Set(raw.evidence_ids ?? [])].filter((i) => byId.has(i));
   const people = new Set(ids.map((i) => byId.get(i)!.participantId)).size;

@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
 import { useAnswer, useProfile } from "@/api/hooks";
 import { AnswerView } from "@/components/research/AnswerView";
-import { FollowUpComposer } from "@/components/research/AnswerParts";
+import { FollowUpComposer, FollowUpThread } from "@/components/research/AnswerParts";
 import { AudiencePickerDialog } from "@/components/research/AudiencePickerDialog";
 import { ClaimTag, EmptyState, ErrorState, Eyebrow, LoadingBlock, relativeTime } from "@/components/research/primitives";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,12 @@ function AnswerPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [picker, setPicker] = useState(false);
-  const follow = useMutation({ mutationFn: (t: string) => api.followUp(id, t), onSuccess: () => qc.invalidateQueries({ queryKey: ["answer", id] }) });
+  const [pendingText, setPendingText] = useState<string | null>(null);
+  const follow = useMutation({
+    mutationFn: (t: string) => api.followUp(id, t),
+    onMutate: (t) => setPendingText(t), // show your message at once, with a typing indicator, until the reply arrives
+    onSettled: async () => { await qc.invalidateQueries({ queryKey: ["answer", id] }); setPendingText(null); },
+  });
   const reask = useMutation({ mutationFn: (v: Parameters<typeof api.ask>[0]) => api.ask(v), onSuccess: (r) => navigate({ to: "/ask/$id", params: { id: r.id } }) });
 
   if (q.isLoading) return <LoadingBlock rows={4} />;
@@ -51,17 +56,7 @@ function AnswerPage() {
       </div>
       <div className="mt-10"><AnswerView answer={a} role={profile.data?.role ?? "designer"} onFollowUp={focus} onCompare={() => setPicker(true)} onPlanTest={() => reask.mutate({ question: "How should I test this?", audience: a.audience, mode: "combine", attachments: [], contextAnswerId: a.id })}
           {...(a.variant === "study_plan" && a.studyPlan ? { onReviewQuestions: () => reask.mutate({ question: "Check these questions for bias", audience: a.audience, mode: "combine", attachments: [{ name: "Study plan questions", kind: "transcript", text: a.studyPlan!.questions.map((q, i) => `${i + 1}. ${q}`).join("\n") }] }) } : {})} /></div>
-      {(a.followUps?.length ?? 0) > 0 && (
-        <div className="mt-12 space-y-4">
-          {a.followUps?.map((f) => (
-            <div key={f.id} className="rounded-2xl border bg-card p-5">
-              <p className="font-semibold">{f.question}</p>
-              <div className="mt-2 flex items-center gap-2"><ClaimTag label={f.label} /></div>
-              <p className="mt-2 text-muted-foreground">{f.reply}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      <FollowUpThread followUps={a.followUps ?? []} pendingText={pendingText} error={follow.isError ? (follow.error as Error).message : null} />
       <FollowUpComposer onSend={(t) => follow.mutate(t)} pending={follow.isPending} />
       <AudiencePickerDialog open={picker} onOpenChange={setPicker} value={a.audience} mode="combine" onApply={(v, m) => reask.mutate({ question: a.question, audience: v, mode: m, attachments: a.attachments ?? [] })} />
     </div>

@@ -5,6 +5,7 @@ import { audienceParticipants, emptyImps, ROLES } from "./shared";
 import { coversTopic } from "./script";
 import { confidenceLabel } from "../../src/config/confidence";
 import { searchEvidence, type Hit } from "../search";
+import { evidenceLines, gatherEvidence, overviewNote, type Scope } from "../retrieve";
 import type { Answer, AudienceRef, Implications, KnownItem, StudyPlan } from "../../src/types/research";
 
 /** Does this question ask for a test/study plan rather than for what users think? */
@@ -41,20 +42,20 @@ const SCHEMA = { type: "OBJECT", properties: {
 type Raw = { method: (typeof METHODS)[number]; method_reason: string; objective: string; task: string; watch_for: string; questions: string[];
   well_understood: { title: string; body: string; evidence_ids: number[] }[]; needs_validation: { title: string; body: string; topic: string[] }[]; implications: Implications };
 
-export type PlanOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; context?: Answer | null; terms: string[] };
+export type PlanOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; context?: Answer | null; scope: Scope };
 const plural = (n: number) => `${n} participant${n === 1 ? "" : "s"}`;
 
 export async function planStudy(db: Db, ai: AiProvider, o: PlanOpts): Promise<Answer> {
   const statuses = o.includeUnreviewed ? ["approved", "pending"] : ["approved"];
   const members = audienceParticipants(db, o.audience);
   const subject = o.context ? o.context.question : o.question;
-  const hits = searchEvidence(db, { terms: [subject, ...o.terms], participants: members, statuses, limit: 40 });
+  const gathered = gatherEvidence(db, { scope: { ...o.scope, terms: [subject, ...o.scope.terms] }, participants: members, statuses, limit: 40 });
+  const hits = gathered.hits;
   const byId = new Map<number, Hit>(hits.map((h) => [h.id, h]));
   const audienceName = o.audience.map((a) => a.name).join(" + ") || "All users";
   const ctx = o.context ? `\nEarlier question: ${o.context.question}\nEarlier finding: ${o.context.headline}. ${o.context.summary}\nKnown gaps already noted: ${o.context.unknowns.map((u) => u.title).join("; ") || "none"}` : "";
   const raw = await ai.generateJson<Raw>({ system: SYS, schema: SCHEMA,
-    prompt: `What the team wants to learn: ${subject}\nAudience: ${audienceName}${ctx}\nStrength of existing evidence: ${new Set(hits.map((h) => h.participantId)).size} participant${new Set(hits.map((h) => h.participantId)).size === 1 ? "" : "s"} with anything possibly relevant (matching is loose, so the truly relevant number is lower).\n\nExisting evidence (${hits.length} items):\n` +
-      (hits.map((h) => `#${h.id} (${h.participantId}, ${h.kind}) ${h.translation ?? h.quote}`).join("\n") || "(none)") });
+    prompt: `What the team wants to learn: ${subject}\nAudience: ${audienceName}${ctx}\nStrength of existing evidence: ${new Set(hits.map((h) => h.participantId)).size} participant${new Set(hits.map((h) => h.participantId)).size === 1 ? "" : "s"} with anything possibly relevant (matching is loose, so the truly relevant number is lower).\n${overviewNote(gathered)}\nExisting evidence (${hits.length} items):\n` + (evidenceLines(hits) || "(none)") });
 
   // Integrity: "well understood" must cite real retrieved evidence from enough different people; otherwise it needs validation instead.
   const known: KnownItem[] = []; const needs: { title: string; body: string }[] = [];

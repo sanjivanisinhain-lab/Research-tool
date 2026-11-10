@@ -8,6 +8,7 @@ import { attachmentsText, looksLikeScript } from "../attachments";
 import { reviewScript } from "./script";
 import { planStudy, wantsStudyPlan } from "./plan";
 import { ftsQuery, searchEvidence, type Hit } from "../search";
+import { evidenceLines, gatherEvidence, overviewNote, searchScope, stripEvidenceMarkers, type Scope } from "../retrieve";
 import type { Answer, Attachment, AudienceRef, ClaimLabel, ComparisonColumn, FollowUp, Implications, Pattern, Role } from "../../src/types/research";
 
 
@@ -23,6 +24,7 @@ const SYS_ANSWER = `You answer a product team's question about a user audience u
 - unknowns: what the evidence cannot tell us.
 - implications: for each role, keep / change / watch (one short sentence each; designer, researcher, pm, marketing, cx, other).
 - headline: a direct answer in under 12 words. It MUST agree with your own signals: if most relevant participants signal negative, the headline says the likely reaction is negative (and vice versa); only say "mixed" if the signals are genuinely split. summary: 1-3 sentences, also consistent with the signals. Quote nothing yourself; quotes are shown separately.
+- Items marked [overview] are a general sample of the audience's research, not matched to your question: use them for broad questions (typical behaviour, habits) by summarising the recurring themes they show; for a specific question they are not evidence unless they actually address it.
 - Be tentative when the evidence is thin.`;
 
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };
@@ -58,22 +60,17 @@ type Assessed = {
 const statusesOf = (o: { includeUnreviewed?: boolean }) => (o.includeUnreviewed ? ["approved", "pending"] : ["approved"]);
 const toConfidence = (c: ReturnType<typeof computeConfidence>): Answer["confidence"] => ({ score: c.score, label: c.label, participants: c.participants, factors: c.factors, methodStatus: c.methodStatus });
 
-async function searchTerms(ai: AiProvider, question: string): Promise<string[]> {
-  const intent = await ai.generateJson<{ keywords: string[] }>({ system: SYS_INTENT, schema: SCHEMA_INTENT, prompt: `Question: ${question}` });
-  return [question, ...(intent.keywords ?? [])];
-}
-
 /** Retrieve evidence for one audience, have the AI cite and label it, then compute confidence in code and verify every citation. */
-async function assessAudience(db: Db, ai: AiProvider, o: { question: string; terms: string[]; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date }): Promise<Assessed> {
-  const hits = searchEvidence(db, { terms: o.terms, participants: audienceParticipants(db, o.audience), statuses: statusesOf(o), limit: 40 });
+async function assessAudience(db: Db, ai: AiProvider, o: { question: string; scope: Scope; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date }): Promise<Assessed> {
+  const gathered = gatherEvidence(db, { scope: o.scope, participants: audienceParticipants(db, o.audience), statuses: statusesOf(o), limit: 40 });
+  const hits = gathered.hits;
   if (!hits.length) {
     const conf = computeConfidence([], o.now);
     return { raw: { headline: "", summary: "", signals: [], patterns: [], unknowns: [], implications: emptyImps() }, conf, confidence: toConfidence(conf), patterns: [], evidenceStances: {}, sources: 0, implications: emptyImps(), empty: true };
   }
   const byId = new Map(hits.map((h) => [h.id, h]));
   const raw = await ai.generateJson<Raw>({ system: SYS_ANSWER, schema: SCHEMA_ANSWER,
-    prompt: `Question: ${o.question}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\n\nEvidence:\n` +
-      hits.map((h) => `#${h.id} (${h.participantId}, ${h.kind}${h.provenance === "researcher_note" ? ", researcher note" : ""}) ${h.translation ?? h.quote}`).join("\n") });
+    prompt: `Question: ${o.question}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` });
   // Integrity: only signals on retrieved evidence count; confidence is computed here, not by the model.
   const seen = new Set<number>();
   const items = (raw.signals ?? []).filter((x) => byId.has(x.evidence_id) && !seen.has(x.evidence_id) && seen.add(x.evidence_id))
@@ -118,13 +115,13 @@ export async function answerQuestion(db: Db, ai: AiProvider, opts: AskOpts): Pro
     const prev = opts.contextAnswerId ? (db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(opts.contextAnswerId) as { j: string } | undefined) : undefined;
     const context = prev ? (JSON.parse(prev.j) as Answer) : null;
     const audience = opts.audience.length || !context ? opts.audience : context.audience;
-    const terms = await searchTerms(ai, context ? context.question : opts.question);
-    return planStudy(db, ai, { question: opts.question, audience, terms, context, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) });
+    const scope = await searchScope(db, ai, context ? context.question : opts.question);
+    return planStudy(db, ai, { question: opts.question, audience, scope, context, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) });
   }
   const id = "ans-" + crypto.randomBytes(5).toString("hex");
   const base = { id, question: opts.question, audience: opts.audience, savedAt: new Date().toISOString(), evidenceStatus: opts.includeUnreviewed ? "includes_unreviewed" as const : "approved_only" as const };
-  const terms = await searchTerms(ai, opts.question);
-  const a = await assessAudience(db, ai, { question: opts.question, terms, audience: opts.audience, includeUnreviewed: opts.includeUnreviewed, now: opts.now });
+  const scope = await searchScope(db, ai, opts.question);
+  const a = await assessAudience(db, ai, { question: opts.question, scope, audience: opts.audience, includeUnreviewed: opts.includeUnreviewed, now: opts.now });
   let result: Answer;
   if (a.empty) {
     result = insufficient(base, a.confidence, "We don't have research that speaks to this question for this audience.");
@@ -154,9 +151,9 @@ export async function compareAudiences(db: Db, ai: AiProvider, opts: AskOpts): P
   const audiences = opts.audience.slice(0, 3);
   if (audiences.length < 2) throw new Error("Comparison needs at least two audiences");
   const id = "ans-" + crypto.randomBytes(5).toString("hex");
-  const terms = await searchTerms(ai, opts.question);
+  const scope = await searchScope(db, ai, opts.question);
   const assessed: Assessed[] = [];
-  for (const aud of audiences) assessed.push(await assessAudience(db, ai, { question: opts.question, terms, audience: [aud], includeUnreviewed: opts.includeUnreviewed, now: opts.now }));
+  for (const aud of audiences) assessed.push(await assessAudience(db, ai, { question: opts.question, scope, audience: [aud], includeUnreviewed: opts.includeUnreviewed, now: opts.now }));
 
   const inconclusive = assessed.some((a) => a.empty || a.conf.withheld);
   const columns: ComparisonColumn[] = audiences.map((aud, i) => ({
@@ -196,6 +193,7 @@ export async function compareAudiences(db: Db, ai: AiProvider, opts: AskOpts): P
 const SYS_FOLLOW = `You answer a follow-up question about a user audience using ONLY the numbered evidence below, in the context of the earlier answer. Never use outside knowledge.
 - reply: 1-4 sentences. Cite nothing in prose; list the evidence numbers you relied on in evidence_ids.
 - label: "evidence" if the reply rests directly on cited evidence; "inference" if it goes beyond what the evidence says (say so in the reply); "no_evidence" if the evidence does not address the question (then say what we don't know).
+- Items marked [overview] are a general sample of the audience's research: use them for broad questions by summarising recurring themes; they are not evidence for a specific question they do not address.
 - If fewer than 5 participants support the reply, sound tentative.`;
 const SCHEMA_FOLLOW = { type: "OBJECT", properties: { reply: { type: "STRING" }, label: { type: "STRING", enum: ["evidence", "inference", "no_evidence"] }, evidence_ids: { type: "ARRAY", items: { type: "INTEGER" } } }, required: ["reply", "label", "evidence_ids"] };
 
@@ -204,16 +202,19 @@ export async function followUp(db: Db, ai: AiProvider, answerId: string, questio
   const row = db.prepare("SELECT answer_json j, includes_unreviewed u FROM answers WHERE id=?").get(answerId) as { j: string; u: number } | undefined;
   if (!row) return null;
   const answer = JSON.parse(row.j) as Answer;
-  const terms = await searchTerms(ai, question);
-  const scope = { participants: audienceParticipants(db, answer.audience), statuses: statusesOf({ includeUnreviewed: !!row.u }) };
-  // Search on the follow-up's own terms first; use the earlier question's context only to pad a thin result
-  // or when the follow-up itself has nothing searchable (e.g. "why?").
-  let hits: Hit[];
-  if (!ftsQuery(terms)) hits = searchEvidence(db, { ...scope, terms: [answer.question], limit: 25 });
-  else {
-    const own = searchEvidence(db, { ...scope, terms, limit: 25 });
-    hits = own.length === 0 || own.length >= 3 ? own : [...own, ...searchEvidence(db, { ...scope, terms: [answer.question], limit: 25 }).filter((h) => !own.some((o) => o.id === h.id))].slice(0, 25);
+  const sc = await searchScope(db, ai, question, `Earlier question in this conversation: ${answer.question}\n`);
+  const members = audienceParticipants(db, answer.audience); const statuses = statusesOf({ includeUnreviewed: !!row.u });
+  // Search on the follow-up's own terms first; use the earlier question's context only when the follow-up itself has
+  // nothing searchable (e.g. "why?"), and the audience overview when the question is broad and keywords find little.
+  let gathered = ftsQuery(sc.terms)
+    ? gatherEvidence(db, { scope: sc, participants: members, statuses, limit: 25 })
+    : gatherEvidence(db, { scope: { ...sc, terms: [answer.question] }, participants: members, statuses, limit: 25 });
+  const own = gathered.hits.filter((h) => !h.overview);
+  if (own.length > 0 && own.length < 3) { // a thin result: pad with the earlier question's evidence
+    const more = searchEvidence(db, { terms: [answer.question], participants: members, statuses, limit: 25 }).filter((h) => !gathered.hits.some((o) => o.id === h.id));
+    gathered = { ...gathered, hits: [...gathered.hits, ...more].slice(0, 40) };
   }
+  const hits = gathered.hits;
   let fu: FollowUp;
   const base = { id: "fu-" + crypto.randomBytes(4).toString("hex"), question, createdAt: now.toISOString() };
   if (!hits.length) {
@@ -221,11 +222,10 @@ export async function followUp(db: Db, ai: AiProvider, answerId: string, questio
   } else {
     const byId = new Map(hits.map((h) => [h.id, h]));
     const out = await ai.generateJson<{ reply: string; label: ClaimLabel; evidence_ids: number[] }>({ system: SYS_FOLLOW, schema: SCHEMA_FOLLOW,
-      prompt: `Earlier question: ${answer.question}\nEarlier answer: ${answer.headline}. ${answer.summary}\nFollow-up: ${question}\nAudience: ${answer.audience.map((a) => a.name).join(" + ") || "All users"}\n\nEvidence:\n` +
-        hits.map((h) => `#${h.id} (${h.participantId}, ${h.kind}) ${h.translation ?? h.quote}`).join("\n") });
+      prompt: `Earlier question: ${answer.question}\nEarlier answer: ${answer.headline}. ${answer.summary}\nFollow-up: ${question}\nAudience: ${answer.audience.map((a) => a.name).join(" + ") || "All users"}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` });
     const ids = [...new Set(out.evidence_ids ?? [])].filter((i) => byId.has(i)).map(String);
     const label: ClaimLabel = out.label === "evidence" && !ids.length ? "inference" : out.label; // uncited "evidence" is downgraded
-    fu = { ...base, reply: out.reply, label, evidenceIds: ids };
+    fu = { ...base, reply: stripEvidenceMarkers(out.reply), label, evidenceIds: ids };
   }
   answer.followUps = [...(answer.followUps ?? []), fu];
   db.prepare("UPDATE answers SET answer_json=? WHERE id=?").run(JSON.stringify(answer), answerId);
