@@ -4,6 +4,13 @@ import { openDb } from "./db";
 import { docxToText, ingestCallsCsv, ingestTranscript } from "./ingest";
 
 const [cmd, kind, file, ...rest] = process.argv.slice(2);
+if (cmd === "synthesise") {
+  const { synthesise } = await import("./ai/personas");
+  const { providerFromEnv } = await import("./ai/provider");
+  const r = await synthesise(openDb(), providerFromEnv(), { includePending: process.argv.includes("--include-unreviewed") });
+  console.log(JSON.stringify(r));
+  process.exit(0);
+}
 if (cmd === "extract") {
   const { extractSource } = await import("./ai/extract");
   const { providerFromEnv } = await import("./ai/provider");
