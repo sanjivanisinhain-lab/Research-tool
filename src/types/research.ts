@@ -31,7 +31,7 @@ export type Confidence = {
   label: ConfidenceLabel;
   participants: number;
   factors: { sample: number; agreement: number; recency: number; contradictions: number };
-  methodStatus: "illustrative"; // flip when a real method exists
+  methodStatus: "illustrative" | "computed_v1"; // computed_v1 = deterministic formula in server/confidence.ts
 };
 
 export type Pattern = {
@@ -118,6 +118,8 @@ export type Answer = {
   implications: Implications;
   attachments?: Attachment[];
   followUps?: FollowUp[];
+  evidenceStances?: Record<string, "supports" | "contradicts">; // per cited evidence id, relative to this answer
+  evidenceStatus?: "approved_only" | "includes_unreviewed"; // unreviewed = research team has not approved all cited evidence
   savedAt: string;
 };
 

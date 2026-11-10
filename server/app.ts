@@ -1,8 +1,16 @@
 import express from "express";
 import { audit, type Db } from "./db";
+import type { AiProvider } from "./ai/provider";
+import { answerQuestion, audienceParticipants } from "./ai/ask";
+import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export function createApp(db: Db) {
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean };
+
+const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
+
+export function createApp(db: Db, opts: AppOpts = {}) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
@@ -62,6 +70,98 @@ export function createApp(db: Db) {
     audit(db, "source.approve_all", { source: req.params.id, evidence: Number(r.changes) });
     res.json({ approved: Number(r.changes) });
   });
+
+
+  // ---------- Product API (matches docs/API_CONTRACT.md) ----------
+  const latestRun = () => (db.prepare("SELECT id, created_at c FROM synthesis_runs ORDER BY id DESC LIMIT 1").get() as { id: number; c: string } | undefined);
+  const statuses = () => (opts.includeUnreviewed ? ["approved", "pending"] : ["approved"]);
+
+  function audienceProfile(kind: "segment" | "persona", id: string): AudienceProfile | null {
+    const run = latestRun(); if (!run) return null;
+    const isP = kind === "persona";
+    const row = db.prepare(isP ? "SELECT id,name,description d FROM personas WHERE id=? AND run_id=?" : "SELECT id,name,characteristic d FROM segments WHERE id=? AND run_id=?").get(id, run.id) as { id: string; name: string; d: string } | undefined;
+    if (!row) return null;
+    const members = (db.prepare(isP ? "SELECT participant_id p FROM persona_participants WHERE persona_id=?" : "SELECT participant_id p FROM segment_participants WHERE segment_id=?").all(id) as { p: string }[]).map((r) => r.p);
+    const traits = isP ? (db.prepare("SELECT trait_type t, text FROM persona_traits WHERE persona_id=?").all(id) as { t: string; text: string }[]) : [];
+    const of = (t: string) => traits.filter((x) => x.t === t).map((x) => x.text);
+    const ph = members.map(() => "?").join(",");
+    const ev = members.length ? (db.prepare(`SELECT e.original_text q, e.translation tr, e.participant_id p, s.original_language l, s.id sid FROM evidence e JOIN sources s ON s.id=e.source_id WHERE e.participant_id IN (${ph}) AND e.status IN (${statuses().map(() => "?").join(",")}) AND e.provenance='participant_verbatim'`).all(...members, ...statuses()) as { q: string; tr: string | null; p: string; l: string; sid: string }[]) : [];
+    return {
+      ref: { kind, id, name: row.name, participants: members.length }, initials: initials(row.name), description: row.d,
+      evidenceStrength: sampleStrength(members.length), corePatterns: traits.length, sources: new Set(ev.map((e) => e.sid)).size, updatedAt: run.c,
+      definingBehaviours: of("behaviour"), needs: of("need"), painPoints: of("pain_point"),
+      language: ev.slice(0, 4).map((e) => ({ quote: e.q, lang: e.l as "en" | "hi" | "hinglish", translation: e.tr ?? undefined, participantId: e.p })),
+      gaps: of("gap"), jobs: of("job_to_be_done"), triggers: of("trigger"), trustBarriers: of("trust_barrier"),
+    };
+  }
+
+  app.get("/api/profile", (_req, res) => {
+    const r = db.prepare("SELECT role,team,area,note,name FROM profiles WHERE id='me'").get();
+    return r ? res.json(r) : res.status(404).end();
+  });
+  app.put("/api/profile", (req, res) => {
+    const b = req.body ?? {};
+    if (!["designer", "researcher", "pm", "marketing", "cx", "other"].includes(b.role) || typeof b.team !== "string" || typeof b.area !== "string") return res.status(400).json({ error: "invalid profile" });
+    db.prepare("INSERT INTO profiles(id,role,team,area,note,name,updated_at) VALUES ('me',?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET role=excluded.role,team=excluded.team,area=excluded.area,note=excluded.note,name=excluded.name,updated_at=excluded.updated_at")
+      .run(b.role, b.team.slice(0, 120), b.area.slice(0, 120), b.note ?? null, b.name ?? null, new Date().toISOString());
+    res.json({ role: b.role, team: b.team, area: b.area, note: b.note, name: b.name });
+  });
+
+  app.get("/api/audiences", (_req, res) => {
+    const run = latestRun(); if (!run) return res.json([]);
+    const segs = (db.prepare("SELECT id FROM segments WHERE run_id=?").all(run.id) as { id: string }[]).map((r) => audienceProfile("segment", r.id));
+    const pers = (db.prepare("SELECT id FROM personas WHERE run_id=?").all(run.id) as { id: string }[]).map((r) => audienceProfile("persona", r.id));
+    res.json([...segs, ...pers].filter(Boolean));
+  });
+  app.get("/api/audiences/:kind/:id", (req, res) => {
+    if (req.params.kind !== "segment" && req.params.kind !== "persona") return res.status(404).end();
+    const a = audienceProfile(req.params.kind, req.params.id);
+    return a ? res.json(a) : res.status(404).end();
+  });
+  app.post("/api/audiences/count", (req, res) => {
+    const aud = Array.isArray(req.body?.audience) ? (req.body.audience as AudienceRef[]) : [];
+    const members = audienceParticipants(db, aud);
+    res.json({ count: members ? members.length : (db.prepare("SELECT COUNT(*) n FROM participants").get() as { n: number }).n });
+  });
+
+  app.post("/api/answers", async (req, res) => {
+    const b = req.body ?? {};
+    if (typeof b.question !== "string" || !b.question.trim() || b.question.length > 4000) return res.status(400).json({ error: "question required" });
+    if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
+    if (b.mode === "compare") return res.status(501).json({ error: "compare mode not implemented yet" });
+    try {
+      const a = await answerQuestion(db, opts.ai, { question: b.question.trim(), audience: Array.isArray(b.audience) ? b.audience : [], includeUnreviewed: opts.includeUnreviewed });
+      res.json({ id: a.id });
+    } catch (e) { console.error("answer failed:", (e as Error).message); res.status(502).json({ error: "answer generation failed" }); }
+  });
+  app.get("/api/answers/:id", (req, res) => {
+    const r = db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(req.params.id) as { j: string } | undefined;
+    return r ? res.type("json").send(r.j) : res.status(404).end();
+  });
+
+  app.get("/api/evidence", (req, res) => {
+    const ids = String(req.query.ids ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 100);
+    if (!ids.length) return res.json([]);
+    const rows = db.prepare(`SELECT e.id,e.participant_id p,e.original_text q,e.translation tr,e.kind,s.source_type st,s.date d,s.original_language l
+      FROM evidence e JOIN sources s ON s.id=e.source_id WHERE e.id IN (${ids.map(() => "?").join(",")}) AND e.status IN (${statuses().map(() => "?").join(",")})`).all(...ids, ...statuses()) as any[];
+    const out: EvidenceItem[] = rows.map((r) => {
+      // stance comes from the most recent answer that cited this evidence
+      const ans = db.prepare("SELECT answer_json j FROM answers WHERE answer_json LIKE ? ORDER BY created_at DESC LIMIT 1").get(`%"${r.id}":"%`) as { j: string } | undefined;
+      const stance = (ans && (JSON.parse(ans.j).evidenceStances ?? {})[String(r.id)]) || "supports";
+      return { id: String(r.id), participantId: r.p, sourceType: r.st, date: r.d ?? "", quote: r.q, originalLanguage: r.l, translation: r.tr ?? undefined, kind: r.kind, stance };
+    });
+    res.json(out);
+  });
+
+  app.get("/api/saved-work", (_req, res) => {
+    const rows = db.prepare("SELECT id,question,variant,audience_json a,created_at c FROM answers ORDER BY created_at DESC LIMIT 100").all() as any[];
+    res.json(rows.map((r) => ({ id: r.id, title: r.question.slice(0, 90), type: "answer", audience: (JSON.parse(r.a) as AudienceRef[]).map((x) => x.name).join(" + ") || "All users",
+      status: r.variant === "insufficient" ? "Insufficient evidence" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } })));
+  });
+
+  for (const p of ["/api/answers/:id/follow-ups", "/api/assessments", "/api/personas/:id/messages"]) app.post(p, (_req, res) => res.status(501).json({ error: "not implemented yet" }));
+  app.get("/api/assessments/:id", (_req, res) => res.status(404).end());
+  app.get("/api/personas/:id/conversation", (_req, res) => res.json([]));
 
   return app;
 }
