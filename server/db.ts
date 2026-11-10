@@ -56,6 +56,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
   db.exec(SCHEMA_V2);
+  db.exec(SCHEMA_V3);
   return db;
 }
 
@@ -94,5 +95,38 @@ CREATE TABLE IF NOT EXISTS extraction_runs (
   proposed INTEGER NOT NULL, kept INTEGER NOT NULL, dropped_unverified INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   UNIQUE (source_id, model, prompt_version)  -- caching key: no repeat AI call for the same source/model/prompt
+);
+`;
+
+export const SCHEMA_V3 = `
+CREATE TABLE IF NOT EXISTS synthesis_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, model TEXT NOT NULL,
+  includes_unreviewed INTEGER NOT NULL, evidence_count INTEGER NOT NULL, participant_count INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS segments (
+  id TEXT PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES synthesis_runs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, characteristic TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS segment_participants (
+  segment_id TEXT NOT NULL REFERENCES segments(id) ON DELETE CASCADE, participant_id TEXT NOT NULL REFERENCES participants(id),
+  PRIMARY KEY (segment_id, participant_id)
+);
+CREATE TABLE IF NOT EXISTS personas (
+  id TEXT PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES synthesis_runs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, description TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published'))
+);
+CREATE TABLE IF NOT EXISTS persona_participants (
+  persona_id TEXT NOT NULL REFERENCES personas(id) ON DELETE CASCADE, participant_id TEXT NOT NULL REFERENCES participants(id),
+  PRIMARY KEY (persona_id, participant_id)   -- one participant may belong to several personas
+);
+CREATE TABLE IF NOT EXISTS persona_traits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, persona_id TEXT NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
+  trait_type TEXT NOT NULL CHECK (trait_type IN ('behaviour','need','pain_point','motivation','trust_barrier','job_to_be_done','trigger','gap')),
+  text TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS persona_trait_evidence (
+  trait_id INTEGER NOT NULL REFERENCES persona_traits(id) ON DELETE CASCADE, evidence_id INTEGER NOT NULL REFERENCES evidence(id),
+  PRIMARY KEY (trait_id, evidence_id)
 );
 `;
