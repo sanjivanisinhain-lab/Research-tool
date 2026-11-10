@@ -23,6 +23,17 @@ const make = (n: number, kw = ["delivery", "late"]) => new MockProvider((req) =>
       patterns: [{ title: "Late", summary: "x", signal: "risk", label: "evidence", evidence_ids: [1, 2, 9999] }, { title: "Uncited", summary: "y", signal: "mixed", label: "evidence", evidence_ids: [777] }],
       conflict: { title: "fake", body: "b", evidence_ids: [888] }, unknowns: [{ title: "u", body: "b" }], implications: imps });
 
+describe("headline consistency", () => {
+  it("rewrites a headline that says mixed when the computed direction is one-sided", async () => {
+    const ai = new MockProvider((req) => req.system.includes("search over") ? { keywords: ["delivery"] }
+      : req.system.includes("Rewrite the draft") ? { headline: "Likely negative reaction", summary: "Most point negative; a few differ." }
+      : { headline: "Trust is mixed", summary: "mixed", signals: Array.from({ length: 12 }, (_, i) => ({ evidence_id: i + 1, signal: "negative" })), patterns: [], unknowns: [], implications: imps });
+    const a = await answerQuestion(seed(12), ai, { question: "late delivery?", audience: [], now: new Date("2026-11-10") });
+    expect(a.headline).toBe("Likely negative reaction");
+    expect(ai.calls).toBe(3);
+  });
+});
+
 describe("ask pipeline", () => {
   it("computes confidence in code, drops fake citations, downgrades uncited claims", async () => {
     const a = await answerQuestion(seed(12), make(12), { question: "Will late delivery matter?", audience: [], now: new Date("2026-11-10") });

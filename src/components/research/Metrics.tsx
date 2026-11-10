@@ -85,13 +85,15 @@ export function ConfidenceRing({ confidence, expandable = true, size = 76 }: { c
             </div>
           ))}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-            <span className="rounded-full bg-mixed-soft px-2 py-0.5 text-[11px] font-semibold text-mixed">Illustrative until the method is defined</span>
+            <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", confidence.methodStatus === "computed_v1" ? "bg-strong-soft text-strong" : "bg-mixed-soft text-mixed")}>{confidence.methodStatus === "computed_v1" ? "Computed from the evidence (v1)" : "Illustrative until the method is defined"}</span>
             <Popover>
               <PopoverTrigger className="inline-flex items-center gap-1 text-xs font-medium underline-offset-2 hover:underline">
                 <Info className="size-3.5" /> How confidence is calculated
               </PopoverTrigger>
               <PopoverContent className="text-sm">
-                Scores and factors are supplied simulated values, not a calculated result. A future method will consider unique participant sample strength, agreement, recency and contradictions; weighting is not yet defined. Below {CONFIDENCE_THRESHOLDS.withholdPrediction}% we withhold predictions.
+                {confidence.methodStatus === "computed_v1"
+                  ? <>Calculated by a fixed formula, not by the AI. Weights: sample 35%, agreement 30%, contradictions 20%, recency 15%. Sample counts distinct participants (not mentions) with diminishing returns; recency halves every 180 days (undated evidence counts as half-fresh). Below {CONFIDENCE_THRESHOLDS.withholdPrediction}% we withhold predictions.</>
+                  : <>Scores and factors are supplied simulated values, not a calculated result. A future method will consider unique participant sample strength, agreement, recency and contradictions; weighting is not yet defined. Below {CONFIDENCE_THRESHOLDS.withholdPrediction}% we withhold predictions.</>}
               </PopoverContent>
             </Popover>
           </div>

@@ -105,13 +105,13 @@ function EvidenceDrawer({ ids, isOpen, onClose, tab, setTab }: { ids: string[]; 
 function SourceContext({ evidence: e }: { evidence: EvidenceItem }) {
   const source = e.sourceContext;
   if (!source) return <p className="mt-4 text-sm text-muted-foreground">Source context unavailable.</p>;
-  return <section id={`source-${e.id}`} className="mt-4 border-t pt-4" aria-label="Simulated source context">
-    <p className="eyebrow text-mixed">Simulated source context</p>
+  return <section id={`source-${e.id}`} className="mt-4 border-t pt-4" aria-label={source.simulated ? "Simulated source context" : "Source context"}>
+    <p className={source.simulated ? "eyebrow text-mixed" : "eyebrow"}>{source.simulated ? "Simulated source context" : "Source context"}</p>
     <h3 className="mt-2 font-semibold">{source.title}</h3>
     <dl className="mt-3 grid grid-cols-2 gap-3 text-xs"><div><dt className="text-muted-foreground">Source reference</dt><dd>{source.reference}</dd></div><div><dt className="text-muted-foreground">Session date</dt><dd>{e.date}</dd></div><div><dt className="text-muted-foreground">Participant</dt><dd>{e.participantId}</dd></div><div><dt className="text-muted-foreground">Recording</dt><dd>{source.recording}</dd></div></dl>
     <p className="mt-4 text-sm text-muted-foreground">{source.context}</p>
     <blockquote className="mt-3 border-l-2 border-brand pl-3 text-sm">{e.quote}</blockquote>
     {e.audio && <CxAudioPlayer evidence={e} />}
-    <p className="mt-3 text-xs text-muted-foreground">Demo context only; not an original transcript or real recording. Translations are shown separately from original wording.</p>
+    <p className="mt-3 text-xs text-muted-foreground">{source.simulated ? "Demo context only; not an original transcript or real recording. " : "Names, numbers and cities were removed before storage. "}Translations are shown separately from original wording.</p>
   </section>;
 }

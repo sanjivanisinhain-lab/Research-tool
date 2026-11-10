@@ -1,3 +1,4 @@
+import { IS_MOCK } from "@/config/dataMode";
 import { useState, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { MessageCircle, MonitorPlay, UserRound, UsersRound, Clock, Plus, MoreHorizontal, Sparkle } from "lucide-react";
@@ -56,7 +57,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-2.5 px-1">
           <Logo />
           <span className="hidden font-display text-lg font-semibold leading-none lg:inline">Research Hub</span>
-          <span className="ml-auto hidden rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground lg:inline">Demo</span>
+          <span className="ml-auto hidden rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground lg:inline">{IS_MOCK ? "Demo" : "Internal"}</span>
         </div>
         <Link to="/" aria-label="New question" className="mt-6 flex h-10 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:bg-primary/90">
           <Plus className="size-4" /><span className="hidden lg:inline">New question</span>

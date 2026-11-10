@@ -153,13 +153,16 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.get("/api/evidence", (req, res) => {
     const ids = String(req.query.ids ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 100);
     if (!ids.length) return res.json([]);
-    const rows = db.prepare(`SELECT e.id,e.participant_id p,e.original_text q,e.translation tr,e.kind,s.source_type st,s.date d,s.original_language l
-      FROM evidence e JOIN sources s ON s.id=e.source_id WHERE e.id IN (${ids.map(() => "?").join(",")}) AND e.status IN (${statuses().map(() => "?").join(",")})`).all(...ids, ...statuses()) as any[];
+    const rows = db.prepare(`SELECT e.id,e.participant_id p,e.original_text q,e.translation tr,e.kind,e.provenance prov,s.id sid,s.title stitle,s.origin,s.quality,st.name study,s.source_type st,s.date d,s.original_language l
+      FROM evidence e JOIN sources s ON s.id=e.source_id JOIN studies st ON st.id=s.study_id WHERE e.id IN (${ids.map(() => "?").join(",")}) AND e.status IN (${statuses().map(() => "?").join(",")})`).all(...ids, ...statuses()) as any[];
     const out: EvidenceItem[] = rows.map((r) => {
       // stance comes from the most recent answer that cited this evidence
       const ans = db.prepare("SELECT answer_json j FROM answers WHERE answer_json LIKE ? ORDER BY created_at DESC LIMIT 1").get(`%"${r.id}":"%`) as { j: string } | undefined;
       const stance = (ans && (JSON.parse(ans.j).evidenceStances ?? {})[String(r.id)]) || "supports";
-      return { id: String(r.id), participantId: r.p, sourceType: r.st, date: r.d ?? "", quote: r.q, originalLanguage: r.l, translation: r.tr ?? undefined, kind: r.kind, stance };
+      return { id: String(r.id), participantId: r.p, sourceType: r.st, date: r.d ?? "", quote: r.q, originalLanguage: r.l, translation: r.tr ?? undefined, kind: r.kind, stance,
+        sourceContext: { simulated: false, reference: r.sid, title: r.stitle,
+          context: `${r.study} · ${r.origin === "researcher_notes" ? (r.prov === "participant_verbatim" ? "researcher notes (participant words quoted)" : "researcher summary, not a verbatim quote") : "interview transcript"}${r.quality === "noisy_asr" ? " · noisy machine transcription" : ""}`,
+          recording: "No recording attached" } };
     });
     res.json(out);
   });

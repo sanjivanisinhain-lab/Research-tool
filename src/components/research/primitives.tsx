@@ -1,3 +1,4 @@
+import { IS_MOCK } from "@/config/dataMode";
 import { BookOpen, ChevronRight, X, Plus, AlertCircle, RotateCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -58,8 +59,8 @@ export function StatusBadge({ children, tone = "neutral" }: { children: ReactNod
 export function SimulatedDataBadge({ className }: { className?: string }) {
   return (
     <span className={cn("inline-flex items-center gap-2 text-xs text-muted-foreground", className)}>
-      <span className="size-2 rounded-full bg-mixed" aria-hidden />
-      Simulated research data
+      <span className={cn("size-2 rounded-full", IS_MOCK ? "bg-mixed" : "bg-strong")} aria-hidden />
+      {IS_MOCK ? "Simulated research data" : "Real research data"}
     </span>
   );
 }

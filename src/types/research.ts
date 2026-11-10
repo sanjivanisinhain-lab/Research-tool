@@ -21,7 +21,7 @@ export type EvidenceItem = {
   kind: "said" | "did";
   stance: "supports" | "contradicts";
   audio?: { simulated: true; url: string; duration: number; cues: { start: number; end: number; text: string }[] };
-  sourceContext?: { simulated: true; reference: string; title: string; context: string; recording: string };
+  sourceContext?: { simulated: boolean; reference: string; title: string; context: string; recording: string };
 };
 
 export type ConfidenceLabel = "high" | "medium" | "low" | "very_low";

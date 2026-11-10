@@ -19,7 +19,7 @@ const SYS_ANSWER = `You answer a product team's question about a user audience u
 - conflict: evidence that contradicts the main conclusion, if any (cite numbers), else null.
 - unknowns: what the evidence cannot tell us.
 - implications: for each role, keep / change / watch (one short sentence each; designer, researcher, pm, marketing, cx, other).
-- headline: a direct answer in under 12 words. summary: 1-3 sentences. Quote nothing yourself; quotes are shown separately.
+- headline: a direct answer in under 12 words. It MUST agree with your own signals: if most relevant participants signal negative, the headline says the likely reaction is negative (and vice versa); only say "mixed" if the signals are genuinely split. summary: 1-3 sentences, also consistent with the signals. Quote nothing yourself; quotes are shown separately.
 - Be tentative when the evidence is thin.`;
 
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };
@@ -31,6 +31,9 @@ const SCHEMA_ANSWER = { type: "OBJECT", properties: {
   unknowns: { type: "ARRAY", items: { type: "OBJECT", properties: { title: { type: "STRING" }, body: { type: "STRING" } }, required: ["title", "body"] } },
   implications: { type: "OBJECT", properties: Object.fromEntries(ROLES.map((r) => [r, imp])), required: ROLES },
 }, required: ["headline", "summary", "signals", "patterns", "unknowns", "implications"] };
+
+const SYS_REWRITE = `Rewrite the draft headline and summary so they agree with the computed finding. The headline (under 12 words) states the likely direction plainly. Keep the nuance (the minority view, conditions) in the summary. Add no new facts, numbers or claims beyond the draft.`;
+const SCHEMA_REWRITE = { type: "OBJECT", properties: { headline: { type: "STRING" }, summary: { type: "STRING" } }, required: ["headline", "summary"] };
 
 type Raw = {
   headline: string; summary: string; signals: { evidence_id: number; signal: Signal }[];
@@ -84,6 +87,12 @@ export async function answerQuestion(db: Db, ai: AiProvider, opts: AskOpts): Pro
     const conflict = raw.conflict && valid(raw.conflict.evidence_ids).length ? { title: raw.conflict.title, body: raw.conflict.body, evidenceIds: valid(raw.conflict.evidence_ids) } : undefined;
     const cited = new Set([...patterns.flatMap((p) => p.evidenceIds), ...(conflict?.evidenceIds ?? [])].map(Number));
     const sources = new Set([...cited].map((i) => byId.get(i)!.sourceId)).size;
+    // Consistency guard: the headline must not contradict the computed direction (e.g. "mixed" while 92% point one way).
+    if (conf.direction && conf.direction.label !== "Mixed" && /\b(mixed|split|divided|varied|ambivalent)\b/i.test(raw.headline)) {
+      const fix = await ai.generateJson<{ headline: string; summary: string }>({ system: SYS_REWRITE, schema: SCHEMA_REWRITE,
+        prompt: `Computed finding: ${conf.direction.pct}% of ${conf.participants} relevant participants point toward a ${conf.direction.label.toLowerCase()} reaction.\nQuestion: ${opts.question}\nDraft headline: ${raw.headline}\nDraft summary: ${raw.summary}` });
+      if (fix.headline && fix.summary) { raw.headline = fix.headline; raw.summary = fix.summary; }
+    }
     const main = conf.direction?.label === "Negative" ? "negative" : "positive";
     const evidenceStances: Record<string, "supports" | "contradicts"> = {};
     for (const s of raw.signals ?? []) if (byId.has(s.evidence_id)) evidenceStances[String(s.evidence_id)] = s.signal === "neutral" || s.signal === main ? "supports" : "contradicts";

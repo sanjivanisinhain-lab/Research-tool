@@ -29,7 +29,7 @@ export class GeminiProvider implements AiProvider {
       if (res.ok) {
         const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
         const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-        try { return JSON.parse(text) as T; } catch { throw new Error("Gemini returned non-JSON output"); }
+        try { return JSON.parse(text) as T; } catch { if (attempt < 3) continue; throw new Error("Gemini returned non-JSON output"); } // malformed/truncated reply: ask again
       }
       if ([429, 500, 502, 503, 504].includes(res.status)) { await new Promise((r) => setTimeout(r, delay)); delay *= 2; continue; }
       throw new Error(`Gemini request failed: HTTP ${res.status}`); // body omitted on purpose: may echo request data
