@@ -3,10 +3,12 @@ import type { Db } from "../db";
 import { audit } from "../db";
 import type { AiProvider } from "./provider";
 import { computeConfidence, type Signal } from "../confidence";
+import { audienceParticipants, emptyImps, ROLES } from "./shared";
+import { attachmentsText, looksLikeScript } from "../attachments";
+import { reviewScript } from "./script";
 import { ftsQuery, searchEvidence, type Hit } from "../search";
-import type { Answer, AudienceRef, ClaimLabel, ComparisonColumn, FollowUp, Implications, Pattern, Role } from "../../src/types/research";
+import type { Answer, Attachment, AudienceRef, ClaimLabel, ComparisonColumn, FollowUp, Implications, Pattern, Role } from "../../src/types/research";
 
-const ROLES: Role[] = ["designer", "researcher", "pm", "marketing", "cx", "other"];
 
 const SYS_INTENT = `You prepare a search over a user-research evidence store (Hindi, Hinglish and English; online shopping in India).
 Return 8-20 short search keywords/phrases: English terms AND likely Hinglish/Hindi (romanised) words users would say for the same ideas. No personal data.`;
@@ -42,19 +44,9 @@ type Raw = {
   unknowns: { title: string; body: string }[]; implications: Implications;
 };
 
-export function audienceParticipants(db: Db, audience: AudienceRef[]): string[] | null {
-  if (!audience.length) return null; // everyone
-  const out = new Set<string>();
-  for (const a of audience) {
-    const sql = a.kind === "persona" ? "SELECT participant_id p FROM persona_participants WHERE persona_id=?" : "SELECT participant_id p FROM segment_participants WHERE segment_id=?";
-    for (const r of db.prepare(sql).all(a.id) as { p: string }[]) out.add(r.p);
-  }
-  return [...out]; // union of distinct participants, never summed
-}
 
-const emptyImps = (): Implications => Object.fromEntries(ROLES.map((r) => [r, { keep: "—", change: "—", watch: "—" }])) as Implications;
 
-export type AskOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date };
+export type AskOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date; attachments?: Attachment[] };
 
 type Assessed = {
   raw: Raw; conf: ReturnType<typeof computeConfidence>; confidence: Answer["confidence"];
@@ -114,6 +106,12 @@ function save(db: Db, result: Answer, includeUnreviewed?: boolean) {
 }
 
 export async function answerQuestion(db: Db, ai: AiProvider, opts: AskOpts): Promise<Answer> {
+  // A pasted/attached research script is reviewed, not answered as a question about users.
+  const scriptText = await attachmentsText(opts.attachments);
+  if (looksLikeScript(opts.question, scriptText)) {
+    const review = await reviewScript(db, ai, { question: opts.question, script: scriptText || opts.question, audience: opts.audience, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) });
+    if (review) return review;
+  }
   const id = "ans-" + crypto.randomBytes(5).toString("hex");
   const base = { id, question: opts.question, audience: opts.audience, savedAt: new Date().toISOString(), evidenceStatus: opts.includeUnreviewed ? "includes_unreviewed" as const : "approved_only" as const };
   const terms = await searchTerms(ai, opts.question);
@@ -230,3 +228,5 @@ function insufficient(base: Pick<Answer, "id" | "question" | "audience" | "saved
   return { ...base, variant: "insufficient", headline: "Insufficient evidence", summary: why + " Don't make a decision from a prediction here; this needs direct validation.",
     confidence: { ...confidence, methodStatus: "computed_v1" }, sources: 0, patterns: [], unknowns: [{ title: "No reliable evidence", body: why }], implications: emptyImps() };
 }
+
+export { audienceParticipants };

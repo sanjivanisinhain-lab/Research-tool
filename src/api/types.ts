@@ -20,7 +20,7 @@ export type AskInput = {
 };
 
 export type AssessmentInput = {
-  prototype: Assessment["prototype"];
+  prototype: Assessment["prototype"] & { data?: string }; // data = base64 image, only for uploads
   task: string;
   goal?: string;
   audience: AudienceRef[];

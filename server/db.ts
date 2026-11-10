@@ -60,6 +60,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   migrateV4(db);
   db.exec(SCHEMA_V5);
   migrateV6(db);
+  db.exec(SCHEMA_V7);
   return db;
 }
 
@@ -182,6 +183,13 @@ export function migrateV6(db: Db) {
   if (!ucols.some((c) => c.name === "start_sec")) db.exec("ALTER TABLE utterances ADD COLUMN start_sec REAL");
   db.exec("CREATE TABLE IF NOT EXISTS media_hashes (sha256 TEXT PRIMARY KEY, source_id TEXT REFERENCES sources(id) ON DELETE SET NULL, created_at TEXT NOT NULL)");
 }
+
+export const SCHEMA_V7 = `
+CREATE TABLE IF NOT EXISTS assessments (
+  id TEXT PRIMARY KEY, task TEXT NOT NULL, audience_json TEXT NOT NULL, includes_unreviewed INTEGER NOT NULL DEFAULT 0,
+  assessment_json TEXT NOT NULL, image_path TEXT, image_mime TEXT, created_at TEXT NOT NULL
+);
+`;
 
 export function migrateV4(db: Db) {
   const srcCols = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];

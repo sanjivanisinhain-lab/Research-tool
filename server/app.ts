@@ -10,17 +10,18 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
+import { assessDesign } from "./ai/assess";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; adminToken?: string; mediaDir?: string; maxMediaBytes?: number };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; adminToken?: string; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
 
 export function createApp(db: Db, opts: AppOpts = {}) {
   const app = express();
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: "25mb" })); // attachments and design images arrive as base64
 
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
@@ -230,7 +231,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     try {
       const a = b.mode === "compare"
         ? await compareAudiences(db, opts.ai, { question: b.question.trim(), audience, includeUnreviewed: opts.includeUnreviewed })
-        : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, includeUnreviewed: opts.includeUnreviewed });
+        : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, attachments: Array.isArray(b.attachments) ? b.attachments : [], includeUnreviewed: opts.includeUnreviewed });
       res.json({ id: a.id });
     } catch (e) { console.error("answer failed:", (e as Error).message); res.status(502).json({ error: "answer generation failed" }); }
   });
@@ -246,7 +247,8 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       FROM evidence e JOIN sources s ON s.id=e.source_id JOIN studies st ON st.id=s.study_id WHERE e.id IN (${ids.map(() => "?").join(",")}) AND e.status IN (${statuses().map(() => "?").join(",")})`).all(...ids, ...statuses()) as any[];
     const out: EvidenceItem[] = rows.map((r) => {
       // stance comes from the most recent answer that cited this evidence
-      const ans = db.prepare("SELECT answer_json j FROM answers WHERE answer_json LIKE ? ORDER BY created_at DESC LIMIT 1").get(`%"${r.id}":"%`) as { j: string } | undefined;
+      const like = `%"${r.id}":"%`;
+      const ans = db.prepare("SELECT j FROM (SELECT answer_json j, created_at c FROM answers WHERE answer_json LIKE ? UNION ALL SELECT assessment_json j, created_at c FROM assessments WHERE assessment_json LIKE ?) ORDER BY c DESC LIMIT 1").get(like, like) as { j: string } | undefined;
       const stance = (ans && (JSON.parse(ans.j).evidenceStances ?? {})[String(r.id)]) || "supports";
       return { id: String(r.id), participantId: r.p, sourceType: r.st, date: r.d ?? "", quote: r.q, originalLanguage: r.l, translation: r.tr ?? undefined, kind: r.kind, stance,
         sourceContext: { simulated: false, reference: r.sid, title: r.stitle,
@@ -257,9 +259,13 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   });
 
   app.get("/api/saved-work", (_req, res) => {
-    const rows = db.prepare("SELECT id,question,variant,audience_json a,created_at c FROM answers ORDER BY created_at DESC LIMIT 100").all() as any[];
-    res.json(rows.map((r) => ({ id: r.id, title: r.question.slice(0, 90), type: "answer", audience: (JSON.parse(r.a) as AudienceRef[]).map((x) => x.name).join(" + ") || "All users",
-      status: r.variant === "insufficient" ? "Insufficient evidence" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } })));
+    const names = (j: string) => (JSON.parse(j) as AudienceRef[]).map((x) => x.name).join(" + ") || "All users";
+    const answers = (db.prepare("SELECT id,question,variant,audience_json a,created_at c FROM answers ORDER BY created_at DESC LIMIT 100").all() as any[]).map((r) => ({
+      id: r.id, title: r.question.slice(0, 90), type: r.variant === "script_review" ? "script_review" : "answer", audience: names(r.a),
+      status: r.variant === "insufficient" ? "Insufficient evidence" : r.variant === "script_review" ? "Reviewed" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } }));
+    const assessments = (db.prepare("SELECT id,task,audience_json a,created_at c,assessment_json j FROM assessments ORDER BY created_at DESC LIMIT 100").all() as any[]).map((r) => ({
+      id: r.id, title: (JSON.parse(r.j).title as string) || r.task.slice(0, 90), type: "assessment", audience: names(r.a), status: "Prediction", updatedAt: r.c, target: { to: "/assess/$id", id: r.id } }));
+    res.json([...answers, ...assessments].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).slice(0, 100));
   });
 
   app.post("/api/answers/:id/follow-ups", async (req, res) => {
@@ -271,8 +277,33 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       return fu ? res.json(fu) : res.status(404).end();
     } catch (e) { console.error("follow-up failed:", (e as Error).message); res.status(502).json({ error: "follow-up failed" }); }
   });
-  for (const p of ["/api/assessments", "/api/personas/:id/messages"]) app.post(p, (_req, res) => res.status(501).json({ error: "not implemented yet" }));
-  app.get("/api/assessments/:id", (_req, res) => res.status(404).end());
+  app.post("/api/assessments", async (req, res) => {
+    const b = req.body ?? {};
+    if (typeof b.task !== "string" || !b.task.trim() || b.task.length > 1000) return res.status(400).json({ error: "task required" });
+    const audience: AudienceRef[] = Array.isArray(b.audience) ? b.audience : [];
+    if (!audience.length) return res.status(400).json({ error: "choose an audience" });
+    const proto = b.prototype ?? {};
+    if (proto.kind === "figma_link") return res.status(422).json({ error: "Figma links can't be opened yet. Export the frame as a PNG or JPG and upload that image." });
+    if (proto.kind !== "upload" || typeof proto.data !== "string") return res.status(400).json({ error: "upload a design image" });
+    if (!["image/png", "image/jpeg", "image/webp"].includes(proto.mimeType)) return res.status(400).json({ error: "design must be a PNG, JPG or WebP image" });
+    const data = Buffer.from(proto.data, "base64");
+    if (!data.length || data.length > 10 * 1024 * 1024) return res.status(400).json({ error: "image must be under 10 MB" });
+    if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
+    try {
+      const a = await assessDesign(db, opts.ai, { image: { data, mimeType: proto.mimeType, name: String(proto.name ?? "design") }, task: b.task.trim(), ...(typeof b.goal === "string" && b.goal.trim() ? { goal: b.goal.trim() } : {}), audience, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}), mediaDir: opts.assetsDir ?? "data/assessments" });
+      res.json({ id: a.id });
+    } catch (e) { console.error("assessment failed:", (e as Error).message); res.status(502).json({ error: "assessment failed" }); }
+  });
+  app.get("/api/assessments/:id/image", (req, res) => {
+    const r = db.prepare("SELECT image_path p, image_mime m FROM assessments WHERE id=?").get(req.params.id) as { p: string | null; m: string | null } | undefined;
+    if (!r?.p || !fs.existsSync(r.p)) return res.status(404).end();
+    res.type(r.m ?? "image/png").send(fs.readFileSync(r.p));
+  });
+  app.get("/api/assessments/:id", (req, res) => {
+    const r = db.prepare("SELECT assessment_json j FROM assessments WHERE id=?").get(req.params.id) as { j: string } | undefined;
+    return r ? res.type("json").send(r.j) : res.status(404).end();
+  });
+  for (const p of ["/api/personas/:id/messages"]) app.post(p, (_req, res) => res.status(501).json({ error: "not implemented yet" }));
   app.get("/api/personas/:id/conversation", (_req, res) => res.json([]));
 
   return app;

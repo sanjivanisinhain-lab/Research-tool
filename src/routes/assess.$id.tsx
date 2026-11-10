@@ -8,6 +8,25 @@ import { ConflictCard, DesignImplications, NextActions, Section, UnknownCard } f
 import { AudienceChips, CitationChip, EmptyState, ErrorState, LoadingBlock, SignalPill } from "@/components/research/primitives";
 import { useEvidenceDrawer } from "@/components/research/EvidenceDrawer";
 import { cn } from "@/lib/utils";
+import { signalDot } from "@/components/research/primitives";
+import type { Annotation } from "@/types/research";
+
+const BASE = import.meta.env["VITE_API_BASE_URL"] ?? "";
+
+// An uploaded design with numbered markers placed from each annotation's box (0-1000 scale: [ymin, xmin, ymax, xmax]).
+function UploadedDesign({ id, annotations, activeId, onSelect }: { id: string; annotations: Annotation[]; activeId: string | null; onSelect: (id: string) => void }) {
+  return (
+    <div className="relative mx-auto w-fit max-w-full">
+      <img src={`${BASE}/api/assessments/${id}/image`} alt="The assessed design" className="block max-h-[640px] max-w-full rounded-xl border bg-card" />
+      {annotations.map((a, i) => a.box && (
+        <div key={a.id} className="absolute" style={{ top: `${a.box[0] / 10}%`, left: `${a.box[1] / 10}%`, height: `${(a.box[2] - a.box[0]) / 10}%`, width: `${(a.box[3] - a.box[1]) / 10}%` }}>
+          <div className={cn("size-full rounded-md border-2 border-dashed transition", activeId === a.id ? "border-foreground" : "border-foreground/30")} />
+          <button type="button" onClick={() => onSelect(a.id)} aria-label={`Annotation ${i + 1}: ${a.title}`} className={cn("absolute -left-3 -top-3 z-10 grid size-7 place-items-center rounded-full border-2 border-card text-xs font-bold text-primary-foreground shadow-md", signalDot(a.signal), activeId === a.id && "scale-125 ring-2 ring-foreground")}>{i + 1}</button>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export const Route = createFileRoute("/assess/$id")({
   head: () => ({ meta: [{ property: "og:type", content: "website" }, { name: "twitter:card", content: "summary_large_image" }, { title: "Assessment — Research Hub" }, { name: "description", content: "Evidence-linked predictions for your prototype." }, { property: "og:title", content: "Assessment — Research Hub" }, { property: "og:description", content: "Prototype assessment." }] }),
@@ -38,8 +57,8 @@ function AssessmentPage() {
       <p className="mt-2 max-w-3xl text-lg text-muted-foreground">{a.summary}</p>
       <div className="mt-8"><MetricsCard direction={a.direction} confidence={a.confidence} /></div>
       <Section eyebrow="Element by element" title="Where the prototype may help or hurt">
-        <div className="grid gap-8 lg:grid-cols-[320px_1fr]">
-          <div className="rounded-3xl bg-secondary p-6 lg:sticky lg:top-6 lg:self-start"><ProductCard annotations={a.annotations} activeId={active} onSelect={setActive} /></div>
+        <div className={cn("grid gap-8", a.prototype.kind === "upload" ? "lg:grid-cols-[minmax(0,420px)_1fr]" : "lg:grid-cols-[320px_1fr]")}>
+          <div className="rounded-3xl bg-secondary p-6 lg:sticky lg:top-6 lg:self-start">{a.prototype.kind === "upload" ? <UploadedDesign id={a.id} annotations={a.annotations} activeId={active} onSelect={setActive} /> : <ProductCard annotations={a.annotations} activeId={active} onSelect={setActive} />}</div>
           <ol className="space-y-3">
             {a.annotations.map((n, i) => (
               <li key={n.id}>

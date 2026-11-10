@@ -85,7 +85,7 @@ export type Comparison = {
   designImplication: string;
 };
 
-export type Attachment = { name: string; kind: "local" | "link" | "transcript"; text?: string };
+export type Attachment = { name: string; kind: "local" | "link" | "transcript"; text?: string; mimeType?: string; data?: string /* base64 of the file, sent only when the server needs to read it */ };
 
 export type FollowUp = {
   id: string;
@@ -144,7 +144,8 @@ export type AudienceProfile = {
 
 export type Annotation = {
   id: string;
-  element: "price" | "countdown" | "original_price";
+  element: string; // "price" | "countdown" | "original_price" for the sample card; any label for uploaded designs
+  box?: [number, number, number, number]; // [ymin, xmin, ymax, xmax] on a 0-1000 scale, for uploaded designs
   title: string;
   signal: Signal;
   summary: string;
@@ -155,7 +156,7 @@ export type Annotation = {
 export type Assessment = {
   id: string;
   title: string;
-  prototype: { kind: "local_sample" } | { kind: "figma_link"; url: string };
+  prototype: { kind: "local_sample" } | { kind: "figma_link"; url: string } | { kind: "upload"; name: string; mimeType: string };
   task: string;
   goal?: string;
   audience: AudienceRef[];
@@ -167,6 +168,8 @@ export type Assessment = {
   conflict?: { title: string; body: string; evidenceIds: string[] };
   unknowns: { title: string; body: string }[];
   implications: Implications;
+  evidenceStances?: Record<string, "supports" | "contradicts">;
+  evidenceStatus?: "approved_only" | "includes_unreviewed";
   savedAt: string;
 };
 
