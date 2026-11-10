@@ -58,6 +58,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   db.exec(SCHEMA_V2);
   db.exec(SCHEMA_V3);
   migrateV4(db);
+  db.exec(SCHEMA_V5);
   return db;
 }
 
@@ -168,3 +169,14 @@ export function migrateV4(db: Db) {
   db.exec(SCHEMA_V4);
   db.exec("INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')");
 }
+
+export const SCHEMA_V5 = `
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('extract','rebuild_audiences')),
+  source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed')),
+  error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+`;

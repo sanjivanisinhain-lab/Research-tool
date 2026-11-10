@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DataRouteImport } from './routes/data'
 import { Route as PersonaChatRouteImport } from './routes/persona-chat'
 import { Route as SavedRouteImport } from './routes/saved'
 import { Route as WelcomeRouteImport } from './routes/welcome'
@@ -24,6 +25,11 @@ import { Route as AudiencesKindIdRouteImport } from './routes/audiences.$kind.$i
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DataRoute = DataRouteImport.update({
+  id: '/data',
+  path: '/data',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PersonaChatRoute = PersonaChatRouteImport.update({
@@ -79,6 +85,7 @@ const AudiencesKindIdRoute = AudiencesKindIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/data': typeof DataRoute
   '/persona-chat': typeof PersonaChatRoute
   '/saved': typeof SavedRoute
   '/welcome': typeof WelcomeRoute
@@ -92,6 +99,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/data': typeof DataRoute
   '/persona-chat': typeof PersonaChatRoute
   '/saved': typeof SavedRoute
   '/welcome': typeof WelcomeRoute
@@ -106,6 +114,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/data': typeof DataRoute
   '/persona-chat': typeof PersonaChatRoute
   '/saved': typeof SavedRoute
   '/welcome': typeof WelcomeRoute
@@ -121,6 +130,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/data'
     | '/persona-chat'
     | '/saved'
     | '/welcome'
@@ -134,6 +144,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/data'
     | '/persona-chat'
     | '/saved'
     | '/welcome'
@@ -147,6 +158,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/data'
     | '/persona-chat'
     | '/saved'
     | '/welcome'
@@ -161,6 +173,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DataRoute: typeof DataRoute
   PersonaChatRoute: typeof PersonaChatRoute
   SavedRoute: typeof SavedRoute
   WelcomeRoute: typeof WelcomeRoute
@@ -180,6 +193,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/data': {
+      id: '/data'
+      path: '/data'
+      fullPath: '/data'
+      preLoaderRoute: typeof DataRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/persona-chat': {
@@ -257,6 +277,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DataRoute: DataRoute,
   PersonaChatRoute: PersonaChatRoute,
   SavedRoute: SavedRoute,
   WelcomeRoute: WelcomeRoute,

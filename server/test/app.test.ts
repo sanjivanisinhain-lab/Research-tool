@@ -28,6 +28,7 @@ describe("admin review API", () => {
     expect(r.status).toBe(202);
     expect(db.prepare("SELECT status, submitted_by FROM sources WHERE title LIKE 'Contribution%'").get()).toEqual({ status: "pending", submitted_by: "contributor" });
     expect(JSON.stringify(db.prepare("SELECT text FROM utterances").all())).not.toContain("9876543210");
+    expect(db.prepare("SELECT COUNT(*) n FROM jobs j JOIN sources s ON s.id=j.source_id WHERE s.submitted_by='contributor' AND j.status='queued'").get()).toEqual({ n: 1 });
     expect((await j("/api/contributions", { method: "POST", body: JSON.stringify({ text: "Customer called from 9876543210 and said delivery was late" }) })).status).toBe(409);
     expect((await j("/api/contributions", { method: "POST", body: JSON.stringify({ text: "x" }) })).status).toBe(400);
   });

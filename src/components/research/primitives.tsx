@@ -46,12 +46,13 @@ export function ClaimTag({ label }: { label: ClaimLabel }) {
   return <span className={cn("inline-flex rounded-md border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider", l.cls)}>{l.text}</span>;
 }
 
-export function StatusBadge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "strong" | "mixed" | "persona" }) {
+export function StatusBadge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "strong" | "mixed" | "persona" | "risk" }) {
   const cls = {
     neutral: "bg-secondary text-secondary-foreground",
     strong: "bg-strong-soft text-strong",
     mixed: "bg-mixed-soft text-mixed",
     persona: "bg-persona-soft text-persona",
+    risk: "bg-risk-soft text-risk",
   }[tone];
   return <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium", cls)}>{children}</span>;
 }

@@ -1,7 +1,7 @@
 import { IS_MOCK } from "@/config/dataMode";
 import { useState, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { MessageCircle, MonitorPlay, UserRound, UsersRound, Clock, Plus, MoreHorizontal, Sparkle } from "lucide-react";
+import { MessageCircle, MonitorPlay, UserRound, UsersRound, Clock, Plus, MoreHorizontal, Sparkle, Database } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useProfile, useSavedWork, useSaveProfile } from "@/api/hooks";
 import { ROLE_OPTIONS, roleLabel } from "@/lib/roleLens";
@@ -18,6 +18,8 @@ const NAV = [
   { to: "/persona-chat", label: "Persona chat", icon: UserRound, match: (p: string) => p.startsWith("/persona-chat") },
   { to: "/audiences", label: "Audiences", icon: UsersRound, match: (p: string) => p.startsWith("/audiences") },
   { to: "/saved", label: "Saved work", icon: Clock, match: (p: string) => p.startsWith("/saved") },
+  // Research-team data management only exists with the real backend
+  ...(IS_MOCK ? [] : [{ to: "/data", label: "Research data", icon: Database, match: (p: string) => p.startsWith("/data") }]),
 ] as const;
 
 export const WORK_ICON: Record<SavedWorkItem["type"], typeof MessageCircle> = {

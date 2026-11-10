@@ -75,9 +75,12 @@ function addUtterances(db: Db, sourceId: string, participantId: string | null, t
   turns.forEach((t, i) => ins.run(sourceId, participantId, t.speaker, i, t.text));
 }
 
+export const CALL_COLUMNS: Record<string, string> = Object.fromEntries(
+  ["Name", "City", "Mobile Number", "Product Name", "Date", "Status", "Notes", "Type of user", "Payment type", "Call duration"].map((c) => [c.toLowerCase(), c]));
+
 /** CX call-notes spreadsheet export (CSV). Names, numbers and cities are removed before storage. */
 export function ingestCallsCsv(db: Db, csv: string, opts: { studyName: string; product: string; termsPath?: string; submittedBy?: SubmittedBy }): IngestResult {
-  const parsed = Papa.parse<Record<string, string>>(csv, { header: true, skipEmptyLines: true });
+  const parsed = Papa.parse<Record<string, string>>(csv, { header: true, skipEmptyLines: true, transformHeader: (h) => CALL_COLUMNS[h.trim().toLowerCase()] ?? h.trim() });
   const rows = parsed.data.filter((r) => (r["Notes"] ?? "").trim());
   const known = loadTerms(opts.termsPath);
   const terms: TermsStore = {
@@ -184,17 +187,19 @@ export async function docxToText(buf: Buffer): Promise<string> {
 }
 
 /** Free-text input from CX or any team member. Always lands as a pending contributor source; never counts as evidence until approved. */
-export function ingestContribution(db: Db, text: string, opts: { kind: "cx_call" | "interview"; note?: string; termsPath?: string }): { sourceId: string; participantId: string } | null {
+export function ingestContribution(db: Db, text: string, opts: { kind: "cx_call" | "interview"; termsPath?: string; submittedBy?: SubmittedBy; studyName?: string; product?: string; date?: string | null; knownNames?: string[] }): { sourceId: string; participantId: string } | null {
   const known = loadTerms(opts.termsPath);
-  const red = makeRedactor(known)(text.trim().slice(0, 20000));
+  const terms: TermsStore = { names: [...known.names, ...(opts.knownNames ?? [])], places: known.places };
+  if (opts.knownNames?.length) saveTerms(opts.termsPath, terms);
+  const red = makeRedactor(terms)(text.trim().slice(0, 200000));
   if (!red.text) return null;
-  const studyId = ensureStudy(db, "Team contributions", "");
+  const studyId = ensureStudy(db, opts.studyName ?? "Team contributions", opts.product ?? "");
   const key = sha(`contrib|${red.text}`);
   if (db.prepare("SELECT 1 FROM sources WHERE external_key=?").get(key)) return null; // duplicate
   db.exec("BEGIN");
   try {
     const pid = addParticipant(db, studyId, {});
-    const sid = addSource(db, { studyId, participantId: pid, type: opts.kind, origin: "researcher_notes", title: `Contribution · ${new Date().toISOString().slice(0, 10)}`, date: new Date().toISOString().slice(0, 10), lang: detectLanguage(red.text), key, counts: red.counts, submittedBy: "contributor" });
+    const sid = addSource(db, { studyId, participantId: pid, type: opts.kind, origin: "researcher_notes", title: opts.studyName ? `${opts.studyName} · notes` : `Contribution · ${new Date().toISOString().slice(0, 10)}`, date: opts.date === undefined ? new Date().toISOString().slice(0, 10) : opts.date, lang: detectLanguage(red.text), key, counts: red.counts, submittedBy: opts.submittedBy ?? "contributor" });
     if (!sid) { db.exec("ROLLBACK"); return null; }
     addUtterances(db, sid, pid, red.text.split(/\n+/).map((t) => t.trim()).filter(Boolean).map((t) => ({ speaker: "note", text: t })));
     audit(db, "contribution.received", { sourceId: sid, redaction: red.counts });

@@ -1,12 +1,14 @@
 import express from "express";
 import { audit, type Db } from "./db";
 import { ingestContribution } from "./ingest";
+import { processUpload } from "./upload";
+import { enqueueExtractions, enqueueRebuild, retryJob } from "./jobs";
 import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; adminToken?: string };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
@@ -16,6 +18,51 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+  // Optional shared admin passcode (set ADMIN_TOKEN). Contributions and the product API stay open.
+  app.use("/api/admin", (req, res, next) => {
+    if (!opts.adminToken || req.get("x-admin-token") === opts.adminToken) return next();
+    res.status(401).json({ error: "admin token required" });
+  });
+
+  // Upload one file. Body = the raw file; details in the query string. Processed immediately, AI extraction runs as a background job.
+  app.put("/api/admin/upload", express.raw({ type: () => true, limit: "60mb" }), async (req, res) => {
+    const q = req.query;
+    const study = String(q.study ?? "").trim().slice(0, 120);
+    const filename = String(q.filename ?? "");
+    if (!study) return res.status(400).json({ error: "study name required" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "empty file" });
+    const date = typeof q.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : null;
+    const result = await processUpload(db, { name: filename, buf: req.body }, {
+      study, product: String(q.product ?? "").slice(0, 80), kind: q.kind === "interview" ? "interview" : "cx_call", date,
+      names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), termsPath: opts.termsPath,
+    });
+    const queued = result.sourcesAdded ? enqueueExtractions(db) : 0;
+    res.status(result.status === "failed" || result.status === "unsupported" ? 422 : 200).json({ ...result, jobsQueued: queued });
+  });
+
+  app.get("/api/admin/sources", (_req, res) => {
+    res.json(db.prepare(`SELECT s.id, s.title, s.source_type AS sourceType, s.origin, s.status, s.submitted_by AS submittedBy, s.date, s.quality, s.original_language AS language,
+        s.redaction_json AS redaction, st.name AS study, s.participant_id AS participantId, s.created_at AS createdAt,
+        (SELECT COUNT(*) FROM evidence e WHERE e.source_id = s.id) AS evidence,
+        (SELECT COUNT(*) FROM evidence e WHERE e.source_id = s.id AND e.status = 'pending') AS pendingEvidence,
+        (SELECT j.status FROM jobs j WHERE j.source_id = s.id AND j.kind = 'extract' ORDER BY j.id DESC LIMIT 1) AS job
+      FROM sources s JOIN studies st ON st.id = s.study_id ORDER BY s.created_at DESC, s.id LIMIT 500`).all().map((r: any) => ({ ...r, redaction: JSON.parse(r.redaction) })));
+  });
+
+  app.get("/api/admin/jobs", (_req, res) => {
+    res.json({
+      counts: db.prepare("SELECT status, COUNT(*) n FROM jobs GROUP BY status").all(),
+      recentFailures: db.prepare("SELECT id, kind, source_id AS sourceId, error FROM jobs WHERE status='failed' ORDER BY id DESC LIMIT 20").all(),
+      aiConfigured: !!opts.ai,
+    });
+  });
+  app.post("/api/admin/jobs/rebuild-audiences", (_req, res) => {
+    const approved = (db.prepare("SELECT COUNT(*) n FROM evidence WHERE status='approved'").get() as { n: number }).n;
+    if (!approved) return res.status(409).json({ error: "No approved evidence yet." });
+    res.status(202).json({ jobId: enqueueRebuild(db) });
+  });
+  app.post("/api/admin/jobs/:id/retry", (req, res) => (retryJob(db, Number(req.params.id)) ? res.json({ ok: true }) : res.status(404).json({ error: "no failed job with that id" })));
 
   // Pending / approved / rejected evidence, with its source context
   app.get("/api/admin/evidence", (req, res) => {
@@ -80,6 +127,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     if (typeof text !== "string" || text.trim().length < 10) return res.status(400).json({ error: "text required (min 10 characters)" });
     const r = ingestContribution(db, text, { kind, termsPath: opts.termsPath });
     if (!r) return res.status(409).json({ error: "duplicate or empty contribution" });
+    enqueueExtractions(db); // read by the AI in the background; the evidence then waits in the review queue
     res.status(202).json({ received: true, status: "pending_review" });
   });
 
