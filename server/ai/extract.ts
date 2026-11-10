@@ -15,6 +15,7 @@ const SYSTEM = `You extract atomic research evidence from redacted user-research
 Rules:
 - Use ONLY the text given. Never use outside knowledge about users. Never invent anything.
 - "quote" MUST be copied character-for-character from one numbered line (a contiguous substring, in its original language/script). If unsure, omit the finding.
+- Lines from speaker "screen" are AI-written observations of what appeared on the participant's screen (not their words). Extract concrete on-screen behaviours and friction from them as kind="did" (e.g. paused 10 seconds on the cart, went back, abandoned), quoting an exact sentence from the line.
 - Only extract what the PARTICIPANT or CUSTOMER said or reported doing. Ignore interviewer questions and instructions. Lines marked "note" are a researcher's summary of a call: extract the participant's reported statements and behaviours from them.
 - kind="said" for stated opinions, reasons, beliefs, feelings. kind="did" for reported or observed behaviour (ordered, cancelled, returned, switched app, paid COD...).
 - Give a short theme (2-4 words, English, lowercase), sentiment toward the product/platform/experience described, and where clearly supported: pain_point, need, job_to_be_done, emotion. Leave them out when not clearly supported.
@@ -83,9 +84,10 @@ export async function extractSource(db: Db, ai: AiProvider, sourceId: string): P
       let utt = byId.get(f.utterance_id);
       if (!utt || !norm(utt.text).includes(q)) utt = chunk.find((u) => norm(u.text).includes(q));
       if (!q || !utt) { dropped++; continue; }
-      const provenance = src.origin === "researcher_notes" && !isQuotedVerbatim(utt.text, q) ? "researcher_note" : "participant_verbatim";
-      const flags = [f.speaker_uncertain ? "speaker_uncertain" : "", src.quality ?? ""].filter(Boolean).join(",");
-      const r = ins.run(sourceId, src.participant_id, utt.id, q, f.translation ?? null, f.kind, provenance, f.theme.toLowerCase(), f.sentiment, f.pain_point ?? null, f.need ?? null, f.job_to_be_done ?? null, f.emotion ?? null, flags, evStatus, new Date().toISOString());
+      const onScreen = utt.speaker === "screen"; // an AI description of the recording, never the participant's own words
+      const provenance = onScreen ? "screen_observation" : src.origin === "researcher_notes" && !isQuotedVerbatim(utt.text, q) ? "researcher_note" : "participant_verbatim";
+      const flags = [f.speaker_uncertain ? "speaker_uncertain" : "", onScreen ? "ai_observation" : "", src.quality ?? ""].filter(Boolean).join(",");
+      const r = ins.run(sourceId, src.participant_id, utt.id, q, f.translation ?? null, onScreen ? "did" : f.kind, provenance, f.theme.toLowerCase(), f.sentiment, f.pain_point ?? null, f.need ?? null, f.job_to_be_done ?? null, f.emotion ?? null, flags, evStatus, new Date().toISOString());
       kept += Number(r.changes);
     }
   }

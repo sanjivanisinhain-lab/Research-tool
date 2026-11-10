@@ -19,6 +19,7 @@ export type UploadResult = { status: "processed" | "partial" | "failed" | "unsup
 export type UploadMeta = { study: string; product: string; kind: "cx_call" | "interview"; date: string; names: string };
 export type AdminSource = { id: string; title: string; sourceType: string; origin: string; status: string; submittedBy: "research_team" | "contributor"; date: string | null; quality: string | null; language: string; redaction: Redaction; study: string; participantId: string; createdAt: string; evidence: number; pendingEvidence: number; job: string | null };
 export type TeamUser = { id: string; email: string; name: string | null; role: "admin" | "user"; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null };
+export type SourceText = { title: string; quality: string | null; utterances: { seq: number; speaker: string; startSec: number | null; text: string }[] };
 export type JobsInfo = { counts: { status: string; n: number }[]; transcriptions: { id: number; status: string; note: string; study: string; createdAt: string }[]; recentFailures: { id: number; kind: string; sourceId: string | null; error: string }[]; aiConfigured: boolean };
 export type ReviewItem = { id: number; participantId: string; quote: string; translation: string | null; kind: "said" | "did"; provenance: string; theme: string; sentiment: string; flags: string; sourceType: string; date: string | null; originalLanguage: string; sourceTitle: string; quality: string | null };
 
@@ -29,13 +30,15 @@ export type StudyRequestItem = {
 };
 
 export const adminApi = {
-  upload(file: File, m: UploadMeta, ackRecordings = false): Promise<UploadResult> {
+  upload(file: File, m: UploadMeta, ackRecordings = false, analyseScreen = false): Promise<UploadResult> {
     const q = new URLSearchParams({ study: m.study, product: m.product, kind: m.kind, names: m.names, filename: file.name });
     if (ackRecordings) q.set("ack", "1");
+    if (analyseScreen) { q.set("screen", "1"); q.set("ackScreen", "1"); } // ticking the screen box is the approval for sending the picture
     if (m.date) q.set("date", m.date);
     return call(`/api/admin/upload?${q}`, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: file });
   },
   sources: () => call<AdminSource[]>("/api/admin/sources"),
+  sourceText: (id: string) => call<SourceText>(`/api/admin/sources/${id}/utterances`),
   jobs: () => call<JobsInfo>("/api/admin/jobs"),
   rebuildAudiences: () => call<{ jobId: number }>("/api/admin/jobs/rebuild-audiences", json("POST")),
   retryJob: (id: number) => call<{ ok: boolean }>(`/api/admin/jobs/${id}/retry`, json("POST")),

@@ -4,7 +4,7 @@ import { setupAuth, type AuthOpts } from "./auth";
 import { ingestContribution } from "./ingest";
 import { processUpload } from "./upload";
 import { enqueueExtractions, enqueueRebuild, enqueueTranscription, retryJob } from "./jobs";
-import { MEDIA_EXTS, ffmpegAvailable } from "./media";
+import { MEDIA_EXTS, ffmpegAvailable, streamKinds } from "./media";
 import { newUploadPath } from "./ai/transcribe";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -36,6 +36,8 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const study = String(q.study ?? "").trim().slice(0, 120);
     if (!study) return res.status(400).json({ error: "study name required" });
     if (q.ack !== "1") return res.status(400).json({ error: "Please confirm that recordings are sent to Google Gemini as recorded." });
+    const screen = q.screen === "1";
+    if (screen && q.ackScreen !== "1") return res.status(400).json({ error: "Please confirm that the picture is sent to Google Gemini too: screens can show names, numbers and addresses that can't be removed first." });
     if (!(await ffmpegAvailable())) return res.status(501).json({ error: "ffmpeg is not installed on the server, so recordings can't be processed." });
     const max = opts.maxMediaBytes ?? 1.5 * 1024 ** 3;
     const file = newUploadPath(opts.mediaDir ?? "data/uploads", ext);
@@ -43,19 +45,20 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const ws = fs.createWriteStream(file, { mode: 0o600 });
     req.on("data", (c: Buffer) => { hash.update(c); size += c.length; if (size > max && !aborted) { aborted = true; req.unpipe(ws); ws.destroy(); fs.rmSync(file, { force: true }); res.status(413).json({ error: "Recording is too large (limit 1.5 GB)." }); } });
     req.on("error", () => { ws.destroy(); fs.rmSync(file, { force: true }); });
-    ws.on("finish", () => {
+    ws.on("finish", async () => {
       if (aborted) return;
       const sha256 = hash.digest("hex");
       const empty = { sourcesAdded: 0, sourcesSkipped: 0, participantsAdded: 0, redaction: { names: 0, phones: 0, emails: 0, places: 0 } };
       if (!size) { fs.rmSync(file, { force: true }); return res.status(400).json({ error: "empty file" }); }
+      if (screen && !(await streamKinds(file)).video) { fs.rmSync(file, { force: true }); return res.status(400).json({ error: "This file has no picture, so the screen can't be analysed. Upload a video, or untick the screen option." }); }
       if (db.prepare("SELECT 1 FROM media_hashes WHERE sha256=?").get(sha256)) {
         fs.rmSync(file, { force: true });
         return res.json({ status: "processed", message: "Already imported: nothing new to add.", format: "recording", ...empty, sourcesSkipped: 1 });
       }
       enqueueTranscription(db, { path: file, sha256, study, product: String(q.product ?? "").slice(0, 80), kind: q.kind === "interview" ? "interview" : "cx_call",
-        date: typeof q.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : null, names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) });
+        date: typeof q.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : null, names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), ...(screen ? { screen: true } : {}), ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) });
       audit(db, "upload.by", { by: req.user!.id, status: "queued", kind: "recording" });
-      res.status(202).json({ status: "queued", format: "recording", message: "Transcription queued. It runs in the background; check the status bar and the Sources tab.", ...empty, jobsQueued: 1 });
+      res.status(202).json({ status: "queued", format: "recording", message: screen ? "Transcription and screen analysis queued. They run in the background; check the status bar and the Sources tab." : "Transcription queued. It runs in the background; check the status bar and the Sources tab.", ...empty, jobsQueued: 1 });
     });
     req.pipe(ws);
   });
@@ -83,6 +86,13 @@ export function createApp(db: Db, opts: AppOpts = {}) {
         (SELECT COUNT(*) FROM evidence e WHERE e.source_id = s.id AND e.status = 'pending') AS pendingEvidence,
         (SELECT j.status FROM jobs j WHERE j.source_id = s.id AND j.kind = 'extract' ORDER BY j.id DESC LIMIT 1) AS job
       FROM sources s JOIN studies st ON st.id = s.study_id ORDER BY s.created_at DESC, s.id LIMIT 500`).all().map((r: any) => ({ ...r, redaction: JSON.parse(r.redaction) })));
+  });
+
+  // The redacted text of a source (speech, notes and any AI screen observations), for checking machine output against what you know.
+  app.get("/api/admin/sources/:id/utterances", (req, res) => {
+    const s = db.prepare("SELECT title, quality FROM sources WHERE id=?").get(req.params.id) as { title: string; quality: string | null } | undefined;
+    if (!s) return res.status(404).json({ error: "not found" });
+    res.json({ title: s.title, quality: s.quality, utterances: db.prepare("SELECT seq, speaker, start_sec AS startSec, text FROM utterances WHERE source_id=? ORDER BY seq LIMIT 3000").all(req.params.id) });
   });
 
   app.get("/api/admin/jobs", (_req, res) => {
@@ -291,7 +301,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       const stance = (ans && (JSON.parse(ans.j).evidenceStances ?? {})[String(r.id)]) || "supports";
       return { id: String(r.id), participantId: r.p, sourceType: r.st, date: r.d ?? "", quote: r.q, originalLanguage: r.l, translation: r.tr ?? undefined, kind: r.kind, stance,
         sourceContext: { simulated: false, reference: r.sid, title: r.stitle,
-          context: `${r.study} · ${r.origin === "researcher_notes" ? (r.prov === "participant_verbatim" ? "researcher notes (participant words quoted)" : "researcher summary, not a verbatim quote") : "interview transcript"}${r.quality === "noisy_asr" ? " · noisy machine transcription" : ""}`,
+          context: `${r.study} · ${r.prov === "screen_observation" ? "AI description of the screen recording, not the participant's words" : r.origin === "researcher_notes" ? (r.prov === "participant_verbatim" ? "researcher notes (participant words quoted)" : "researcher summary, not a verbatim quote") : "interview transcript"}${r.quality === "noisy_asr" ? " · noisy machine transcription" : r.quality === "asr_gemini" || r.quality === "asr_screen_gemini" ? " · machine transcript" : ""}`,
           recording: "No recording attached" } };
     });
     res.json(out);

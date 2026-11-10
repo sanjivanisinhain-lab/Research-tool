@@ -209,7 +209,7 @@ export function ingestContribution(db: Db, text: string, opts: { kind: "cx_call"
 }
 
 /** A transcript produced by machine transcription of a recording: already split into timed turns. One recording = one participant. */
-export function ingestTimedTranscript(db: Db, turns: { speaker: string; text: string; start?: number }[], opts: { studyName: string; product: string; kind: "interview" | "cx_call"; date?: string | null; knownNames?: string[]; termsPath?: string; submittedBy?: SubmittedBy; mediaSha?: string }): { sourceId: string; participantId: string; redaction: RedactionCounts } | null {
+export function ingestTimedTranscript(db: Db, turns: { speaker: string; text: string; start?: number }[], opts: { studyName: string; product: string; kind: "interview" | "cx_call"; date?: string | null; knownNames?: string[]; termsPath?: string; submittedBy?: SubmittedBy; mediaSha?: string; quality?: string }): { sourceId: string; participantId: string; redaction: RedactionCounts } | null {
   const known = loadTerms(opts.termsPath);
   const terms: TermsStore = { names: [...known.names, ...(opts.knownNames ?? [])], places: known.places };
   if (opts.knownNames?.length) saveTerms(opts.termsPath, terms);
@@ -223,7 +223,7 @@ export function ingestTimedTranscript(db: Db, turns: { speaker: string; text: st
   db.exec("BEGIN");
   try {
     const pid = addParticipant(db, studyId, {});
-    const sid = addSource(db, { studyId, participantId: pid, type: opts.kind, origin: "verbatim_transcript", title: `${opts.studyName} · recording`, date: opts.date ?? null, lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: "asr_gemini", submittedBy: opts.submittedBy ?? "research_team" });
+    const sid = addSource(db, { studyId, participantId: pid, type: opts.kind, origin: "verbatim_transcript", title: `${opts.studyName} · recording`, date: opts.date ?? null, lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: opts.quality ?? "asr_gemini", submittedBy: opts.submittedBy ?? "research_team" });
     if (!sid) { db.exec("ROLLBACK"); return null; }
     addUtterances(db, sid, pid, red);
     audit(db, "ingest.recording", { studyId, redaction: counts });

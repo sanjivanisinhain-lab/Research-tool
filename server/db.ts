@@ -64,6 +64,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   db.exec(SCHEMA_V8);
   migrateV9(db);
   db.exec(SCHEMA_V10);
+  migrateV11(db);
   return db;
 }
 
@@ -84,7 +85,7 @@ CREATE TABLE IF NOT EXISTS evidence (
   original_text TEXT NOT NULL,       -- exact substring of a redacted utterance (verified server-side)
   translation TEXT,                  -- English, never presented as verbatim
   kind TEXT NOT NULL CHECK (kind IN ('said','did')),
-  provenance TEXT NOT NULL CHECK (provenance IN ('participant_verbatim','researcher_note')),
+  provenance TEXT NOT NULL CHECK (provenance IN ('participant_verbatim','researcher_note','screen_observation')),
   theme TEXT NOT NULL,
   sentiment TEXT NOT NULL CHECK (sentiment IN ('positive','negative','neutral','mixed')),
   pain_point TEXT, need TEXT, job_to_be_done TEXT, emotion TEXT,
@@ -276,4 +277,42 @@ export function migrateV9(db: Db) {
   add("study_requests", "user_id", "TEXT");
   add("evidence", "reviewed_by", "TEXT");
   add("evidence", "reviewed_at", "TEXT");
+}
+
+/** Evidence gained a 'screen_observation' provenance (AI-described on-screen behaviour). SQLite can't alter a CHECK, so older databases rebuild the table once. */
+export function migrateV11(db: Db) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='evidence'").get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("screen_observation")) return;
+  db.exec("PRAGMA foreign_keys = OFF"); // other tables point at evidence(id); they keep pointing at the table of that name
+  try {
+    db.exec("BEGIN");
+    db.exec(`CREATE TABLE evidence_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+      participant_id TEXT NOT NULL REFERENCES participants(id),
+      utterance_id INTEGER REFERENCES utterances(id),
+      original_text TEXT NOT NULL, translation TEXT,
+      kind TEXT NOT NULL CHECK (kind IN ('said','did')),
+      provenance TEXT NOT NULL CHECK (provenance IN ('participant_verbatim','researcher_note','screen_observation')),
+      theme TEXT NOT NULL,
+      sentiment TEXT NOT NULL CHECK (sentiment IN ('positive','negative','neutral','mixed')),
+      pain_point TEXT, need TEXT, job_to_be_done TEXT, emotion TEXT,
+      flags TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+      review_note TEXT, created_at TEXT NOT NULL,
+      canonical_theme TEXT, reviewed_by TEXT, reviewed_at TEXT,
+      UNIQUE (source_id, original_text)
+    )`);
+    const cols = (db.prepare("PRAGMA table_info(evidence)").all() as { name: string }[]).map((c) => c.name);
+    const keep = ["id","source_id","participant_id","utterance_id","original_text","translation","kind","provenance","theme","sentiment","pain_point","need","job_to_be_done","emotion","flags","status","review_note","created_at","canonical_theme","reviewed_by","reviewed_at"].filter((c) => cols.includes(c)).join(",");
+    db.exec(`INSERT INTO evidence_new(${keep}) SELECT ${keep} FROM evidence`);
+    db.exec("DROP TABLE evidence");
+    db.exec("ALTER TABLE evidence_new RENAME TO evidence");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_evidence_status ON evidence(status)");
+    db.exec("COMMIT");
+  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ } throw e; }
+  finally { db.exec("PRAGMA foreign_keys = ON"); }
+  const bad = db.prepare("PRAGMA foreign_key_check").all();
+  if (bad.length) throw new Error(`foreign key check failed after evidence migration (${bad.length})`);
+  migrateV4(db); // the search index and its triggers belonged to the old table: recreate and rebuild
 }

@@ -3,6 +3,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileUp, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { adminApi, AdminForbiddenError, type AdminSource, type Redaction, type StudyRequestItem, type TeamUser, type UploadResult } from "@/api/admin";
 import { EmptyState, ErrorState, LoadingBlock, PageHeader, StatusBadge, relativeTime } from "@/components/research/primitives";
@@ -15,6 +16,7 @@ export const Route = createFileRoute("/data")({
   component: DataPage,
 });
 
+const isVideo = (name: string) => /\.(mp4|mov|mkv|webm|avi|3gp)$/i.test(name);
 const isRecording = (name: string) => /\.(mp3|wav|m4a|aac|ogg|opus|flac|mp4|mov|mkv|webm|avi|3gp)$/i.test(name);
 const redactionText = (r: Redaction) => {
   const parts = [r.names && `${r.names} name${r.names === 1 ? "" : "s"}`, r.phones && `${r.phones} number${r.phones === 1 ? "" : "s"}`, r.emails && `${r.emails} email${r.emails === 1 ? "" : "s"}`, r.places && `${r.places} cit${r.places === 1 ? "y" : "ies"}`].filter(Boolean);
@@ -95,6 +97,7 @@ function UploadTab() {
   const [rows, setRows] = useState<Row[]>([]);
   const [over, setOver] = useState(false);
   const [ack, setAck] = useState(false);
+  const [screen, setScreen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const set = (k: keyof typeof meta) => (e: { target: { value: string } }) => setMeta((m) => ({ ...m, [k]: e.target.value }));
 
@@ -106,7 +109,7 @@ function UploadTab() {
     for (const [i, f] of files.entries()) {
       if (isRecording(f.name) && !ack) { patch(i, { state: "done", error: "Tick the box about recordings (left) first, then upload this file again." }); continue; }
       patch(i, { state: "uploading" });
-      try { patch(i, { state: "done", result: await adminApi.upload(f, meta, ack) }); }
+      try { patch(i, { state: "done", result: await adminApi.upload(f, meta, ack, screen && isVideo(f.name)) }); }
       catch (e) { patch(i, { state: "done", error: (e as Error).message }); }
     }
     qc.invalidateQueries({ queryKey: ["admin"] });
@@ -133,6 +136,10 @@ function UploadTab() {
           <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={ack} onChange={(e) => setAck(e.target.checked)} aria-label="Approve sending recordings to Gemini" />
           <span><span className="font-semibold">Recordings (audio or video)</span> are sent to Google Gemini exactly as recorded. Voices and spoken names can't be removed first, and on Gemini's free tier Google may use them to improve its products. Names in the finished transcript are removed. <span className="font-semibold">I approve this for the recordings I upload.</span></span>
         </label>
+        <label className="flex gap-2.5 rounded-lg border border-mixed/40 bg-mixed-soft/50 p-3 text-xs">
+          <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={screen} onChange={(e) => setScreen(e.target.checked)} aria-label="Approve analysing what is on screen" />
+          <span><span className="font-semibold">Also analyse what happens on screen</span> in videos (taps, scrolling, pauses, going back). The <span className="font-semibold">picture</span> is sent to Gemini as recorded. Screens can show names, phone numbers, addresses and order details that can't be removed first, and on the free tier Google may use them. Descriptions are AI-written, so check them. <span className="font-semibold">I approve this for the videos I upload.</span> Recordings are deleted once processed.</span>
+        </label>
         <p className="flex gap-2 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0" />Names, mobile numbers, emails and cities are removed before anything is stored or sent to the AI. Original files and their file names are not kept.</p>
       </div>
       <div>
@@ -143,7 +150,7 @@ function UploadTab() {
           <FileUp className="size-7 text-muted-foreground" />
           <p className="mt-3 font-display text-lg font-semibold">Drop files here, or click to choose</p>
           <p className="mt-1 text-sm text-muted-foreground">CSV and Excel call notes · transcripts as txt, docx or pdf · recordings as mp3, wav, m4a, mp4, mov</p>
-          <p className="mt-1 text-xs text-muted-foreground">Recordings are transcribed in the background (audio only; what is on screen in a video is not analysed yet). Scanned PDFs can't be read yet.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Recordings are transcribed in the background. Tick the screen option to also analyse what happens on screen in videos. Scanned PDFs can't be read yet.</p>
           <input ref={input} type="file" multiple hidden accept=".csv,.xlsx,.xls,.txt,.md,.docx,.pdf,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac,.mp4,.mov,.mkv,.webm" onChange={(e) => { run([...(e.target.files ?? [])]); e.target.value = ""; }} />
         </div>
         <ul className="mt-4 space-y-2">{rows.map((r, i) => <ResultRow key={i} row={r} />)}</ul>
@@ -180,6 +187,7 @@ function SourcesTab() {
   const q = useQuery({ queryKey: ["admin", "sources"], queryFn: adminApi.sources, refetchInterval: 5000 });
   const jobs = useQuery({ queryKey: ["admin", "jobs"], queryFn: adminApi.jobs, refetchInterval: 4000 });
   const inProgress = jobs.data?.transcriptions ?? [];
+  const [viewing, setViewing] = useState<string | null>(null);
   if (q.isLoading) return <div className="mt-6"><LoadingBlock /></div>;
   if (q.isError) return <div className="mt-6"><ErrorState onRetry={() => q.refetch()} /></div>;
   const rows: AdminSource[] = q.data ?? [];
@@ -193,19 +201,21 @@ function SourcesTab() {
         ))}
       </ul>
     )}
+    <SourceTextDialog id={viewing} onClose={() => setViewing(null)} />
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-left text-sm">
-        <thead className="border-b bg-muted/40"><tr>{["Participant", "Study", "Type", "From", "Evidence", "AI", "Privacy", "Added"].map((h) => <th key={h} className="eyebrow px-4 py-3">{h}</th>)}</tr></thead>
+        <thead className="border-b bg-muted/40"><tr>{["Participant", "Study", "Type", "From", "Evidence", "AI", "Privacy", "Added", ""].map((h) => <th key={h} className="eyebrow px-4 py-3">{h}</th>)}</tr></thead>
         <tbody>{rows.map((s) => (
           <tr key={s.id} className="border-b last:border-0 align-top">
             <td className="px-4 py-3 font-medium tabular-nums">{s.participantId}</td>
-            <td className="px-4 py-3">{s.study}{s.quality === "noisy_asr" && <span className="block text-xs text-mixed">Noisy machine transcript</span>}{s.quality === "asr_gemini" && <span className="block text-xs text-mixed">Machine transcript: check wording</span>}</td>
+            <td className="px-4 py-3">{s.study}{s.quality === "noisy_asr" && <span className="block text-xs text-mixed">Noisy machine transcript</span>}{s.quality === "asr_gemini" && <span className="block text-xs text-mixed">Machine transcript: check wording</span>}{s.quality === "asr_screen_gemini" && <span className="block text-xs text-mixed">Machine transcript + AI screen description: check against the recording</span>}</td>
             <td className="px-4 py-3 text-xs">{s.sourceType === "cx_call" ? "CX call" : "Interview"}<span className="block text-muted-foreground">{s.origin === "researcher_notes" ? "researcher notes" : "verbatim transcript"}</span></td>
             <td className="px-4 py-3"><StatusBadge tone={s.submittedBy === "research_team" ? "strong" : "mixed"}>{s.submittedBy === "research_team" ? "Research team" : "Contributor"}</StatusBadge></td>
             <td className="px-4 py-3 tabular-nums">{s.evidence}{s.pendingEvidence > 0 && <span className="block text-xs text-mixed">{s.pendingEvidence} to review</span>}</td>
             <td className="px-4 py-3 text-xs">{s.job ? JOB_LABEL[s.job] : "—"}</td>
             <td className="px-4 py-3 text-xs text-muted-foreground">{redactionText(s.redaction)}</td>
             <td className="px-4 py-3 text-xs text-muted-foreground">{relativeTime(s.createdAt)}</td>
+            <td className="px-4 py-3"><button className="text-xs font-medium underline-offset-2 hover:underline" onClick={() => setViewing(s.id)}>View text</button></td>
           </tr>))}</tbody>
       </table>
     </div>
@@ -229,6 +239,7 @@ function ReviewTab() {
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span className="font-semibold text-foreground">{e.participantId}</span><span>{e.kind === "said" ? "said" : "did"}</span><span>· {e.theme}</span><span>· {e.sentiment}</span>
               {e.provenance === "researcher_note" && <StatusBadge tone="mixed">researcher's summary</StatusBadge>}
+              {e.provenance === "screen_observation" && <StatusBadge tone="mixed">AI screen description</StatusBadge>}
               {e.flags && <StatusBadge tone="risk">{e.flags.replace(/_/g, " ")}</StatusBadge>}
             </div>
             <blockquote className="mt-2 border-l-2 pl-3 text-base">{e.quote}</blockquote>
@@ -355,5 +366,36 @@ function TeamTab() {
         </table>
       </div>
     </div>
+  );
+}
+
+const mmss = (s: number | null) => (s === null ? "" : `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
+const SPEAKER: Record<string, string> = { interviewer: "Interviewer", participant: "Participant", screen: "On screen", note: "Note", other: "Other" };
+
+/** Read what was stored for a source (already redacted), so machine output can be checked. */
+function SourceTextDialog({ id, onClose }: { id: string | null; onClose: () => void }) {
+  const q = useQuery({ queryKey: ["admin", "source-text", id], queryFn: () => adminApi.sourceText(id!), enabled: !!id });
+  return (
+    <Dialog open={!!id} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogHeader><DialogTitle>{q.data?.title ?? "Stored text"}</DialogTitle></DialogHeader>
+        {q.isLoading && <LoadingBlock />}
+        {q.isError && <ErrorState onRetry={() => q.refetch()} />}
+        {q.data && (
+          <div>
+            <p className="mb-3 text-xs text-muted-foreground">Names, numbers and cities are already removed. {q.data.quality?.includes("gemini") ? "This was written by a machine from a recording: check it against what you know." : ""}</p>
+            <ol className="space-y-2 text-sm">
+              {q.data.utterances.map((u) => (
+                <li key={u.seq} className={cn("flex gap-3 rounded-lg px-3 py-2", u.speaker === "screen" ? "bg-mixed-soft/50" : "bg-muted/40")}>
+                  <span className="w-14 shrink-0 text-xs tabular-nums text-muted-foreground">{mmss(u.startSec)}</span>
+                  <span className="w-20 shrink-0 text-xs font-semibold">{SPEAKER[u.speaker] ?? u.speaker}</span>
+                  <span className="min-w-0">{u.text}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

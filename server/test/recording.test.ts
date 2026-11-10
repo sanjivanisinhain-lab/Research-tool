@@ -47,7 +47,8 @@ describe.skipIf(!hasFfmpeg)("recording upload and transcription", () => {
 
     const u = db.prepare("SELECT speaker, text, start_sec FROM utterances ORDER BY seq").all() as { speaker: string; text: string; start_sec: number }[];
     expect(u).toHaveLength(6);
-    expect(u.map((x) => x.start_sec)).toEqual([2, 9.5, 302, 309.5, 602, 609.5]); // each chunk offset by 300 s
+    const want = [2, 9.5, 302, 309.5, 602, 609.5]; // each part starts where the previous one really ended (about 300 s, to the audio frame)
+    u.forEach((x, i) => expect(x.start_sec).toBeCloseTo(want[i], 0));
     expect(JSON.stringify(u)).not.toMatch(/Rakesh|9876543210/);
     expect(db.prepare("SELECT quality, origin, submitted_by, status FROM sources").get()).toEqual({ quality: "asr_gemini", origin: "verbatim_transcript", submitted_by: "research_team", status: "approved" });
     expect(fs.readdirSync(path.join(dir, "uploads"))).toHaveLength(0); // recording not kept
