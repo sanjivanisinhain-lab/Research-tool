@@ -62,6 +62,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   migrateV6(db);
   db.exec(SCHEMA_V7);
   db.exec(SCHEMA_V8);
+  migrateV9(db);
   return db;
 }
 
@@ -226,3 +227,36 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 `;
+
+export const SCHEMA_V9 = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')),
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, last_login_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,                 -- sha256 of the cookie value; the token itself is never stored
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+`;
+
+/** Adds owner/reviewer columns to tables that existed before login. Old rows stay NULL until the first admin claims them. */
+export function migrateV9(db: Db) {
+  db.exec(SCHEMA_V9);
+  const add = (table: string, col: string, ddl: string) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+  };
+  add("answers", "user_id", "TEXT");
+  add("assessments", "user_id", "TEXT");
+  add("study_requests", "user_id", "TEXT");
+  add("evidence", "reviewed_by", "TEXT");
+  add("evidence", "reviewed_at", "TEXT");
+}

@@ -24,7 +24,7 @@ beforeAll(async () => {
     INSERT INTO personas(id,run_id,name,description) VALUES ('PER-1',1,'Cash Cautious','desc');
     INSERT INTO persona_participants VALUES ('PER-1','P001'),('PER-1','P002'),('PER-1','P003');
     INSERT INTO persona_traits(persona_id,trait_type,text) VALUES ('PER-1','gap','unknown thing');`);
-  server = createApp(db, { ai }).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`;
+  server = createApp(db, { auth: { authDisabled: true }, ai }).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`;
 });
 afterAll(() => server.close());
 const call = (p: string, init?: RequestInit) => fetch(base + p, { headers: { "content-type": "application/json" }, ...init });
@@ -58,7 +58,7 @@ describe("product API", () => {
     expect((await call("/api/answers", { method: "POST", body: JSON.stringify({ question: "" }) })).status).toBe(400);
   });
   it("reports unavailable AI honestly", async () => {
-    const s2 = createApp(db, { ai: null }).listen(0);
+    const s2 = createApp(db, { auth: { authDisabled: true }, ai: null }).listen(0);
     const r = await fetch(`http://127.0.0.1:${(s2.address() as any).port}/api/answers`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question: "q" }) });
     expect(r.status).toBe(503); s2.close();
   });

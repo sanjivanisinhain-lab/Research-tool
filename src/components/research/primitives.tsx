@@ -1,5 +1,5 @@
 import { IS_MOCK } from "@/config/dataMode";
-import { BookOpen, ChevronRight, X, Plus, AlertCircle, RotateCw } from "lucide-react";
+import { BookOpen, ChevronRight, X, Plus, AlertCircle, RotateCw, Sparkle } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { AudienceRef, ClaimLabel, EvidenceItem, Signal, SourceType } from "@/types/research";
@@ -55,6 +55,14 @@ export function StatusBadge({ children, tone = "neutral" }: { children: ReactNod
     risk: "bg-risk-soft text-risk",
   }[tone];
   return <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium", cls)}>{children}</span>;
+}
+
+export function Logo({ inverted }: { inverted?: boolean }) {
+  return (
+    <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl", inverted ? "bg-brand-foreground text-brand" : "bg-foreground text-background")}>
+      <Sparkle className="size-4" />
+    </span>
+  );
 }
 
 export function SimulatedDataBadge({ className }: { className?: string }) {

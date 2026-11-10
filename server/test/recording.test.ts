@@ -22,7 +22,7 @@ beforeAll(() => {
     execFileSync("ffmpeg", ["-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=650", "-b:a", "16k", f]);
     sample = fs.readFileSync(f);
   }
-  server = createApp(db, { mediaDir: path.join(dir, "uploads"), maxMediaBytes: 50 * 1024 * 1024 }).listen(0);
+  server = createApp(db, { auth: { authDisabled: true }, mediaDir: path.join(dir, "uploads"), maxMediaBytes: 50 * 1024 * 1024 }).listen(0);
   base = `http://127.0.0.1:${(server.address() as any).port}`;
 });
 afterAll(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });

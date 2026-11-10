@@ -1,16 +1,21 @@
 // HTTP stub for the future Node/Express/SQLite backend. Every endpoint except
 // /api/health and /api/records is PROPOSED — see docs/API_CONTRACT.md.
 import type { ResearchApi } from "./types";
+import { AUTH_REQUIRED_EVENT } from "./auth";
 
 const BASE = import.meta.env['VITE_API_BASE_URL'] ?? "";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", "x-requested-with": "research-hub", ...(init?.headers ?? {}) },
   });
+  if (res.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT)); // signed out or session expired
   if (res.status === 404) return null as T;
-  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Request failed (${res.status})`); // show the server's own explanation when it gave one
+  }
   return (await res.json()) as T;
 }
 const post = <T>(path: string, body: unknown) => req<T>(path, { method: "POST", body: JSON.stringify(body) });

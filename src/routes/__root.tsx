@@ -8,6 +8,7 @@ import { EvidenceDrawerProvider } from "@/components/research/EvidenceDrawer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { api } from "@/api";
+import { AuthGate } from "@/components/research/AuthGate";
 
 function NotFoundComponent() {
   return (
@@ -60,21 +61,27 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthGate><RootLayout /></AuthGate>
+    </QueryClientProvider>
+  );
+}
+
+function RootLayout() {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
   const onboarding = path.startsWith("/welcome") || path.startsWith("/onboarding");
   useEffect(() => {
     if (onboarding) return;
-    api.getProfile().then((p) => { if (!p) navigate({ to: "/welcome" }); });
+    api.getProfile().then((p) => { if (!p) navigate({ to: "/welcome" }); }).catch(() => { /* a 401 is handled by the sign-in gate */ });
   }, [onboarding, navigate]);
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <EvidenceDrawerProvider>
-          {onboarding ? <Outlet /> : <AppShell><Outlet /></AppShell>}
-          <Toaster />
-        </EvidenceDrawerProvider>
-      </TooltipProvider>
-    </QueryClientProvider>
+    <TooltipProvider>
+      <EvidenceDrawerProvider>
+        {onboarding ? <Outlet /> : <AppShell><Outlet /></AppShell>}
+        <Toaster />
+      </EvidenceDrawerProvider>
+    </TooltipProvider>
   );
 }

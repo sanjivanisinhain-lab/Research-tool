@@ -4,9 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileUp, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { adminApi, adminToken, AdminAuthError, type AdminSource, type Redaction, type StudyRequestItem, type UploadResult } from "@/api/admin";
+import { adminApi, AdminForbiddenError, type AdminSource, type Redaction, type StudyRequestItem, type TeamUser, type UploadResult } from "@/api/admin";
 import { EmptyState, ErrorState, LoadingBlock, PageHeader, StatusBadge, relativeTime } from "@/components/research/primitives";
 import { cn } from "@/lib/utils";
+import { authApi } from "@/api/auth";
+const authMe = authApi.me;
 
 export const Route = createFileRoute("/data")({
   head: () => ({ meta: [{ title: "Research data — Research Hub" }, { name: "description", content: "Upload research, review what the AI extracted, and rebuild audiences." }] }),
@@ -21,9 +23,8 @@ const redactionText = (r: Redaction) => {
 const field = "h-10 w-full rounded-lg border bg-card px-3 text-sm outline-none focus:border-foreground/40";
 
 function DataPage() {
-  const [, force] = useState(0);
   const jobs = useQuery({ queryKey: ["admin", "jobs"], queryFn: adminApi.jobs, refetchInterval: 4000, retry: false });
-  if (jobs.error instanceof AdminAuthError) return <PasscodeGate onDone={() => { force((n) => n + 1); jobs.refetch(); }} />;
+  if (jobs.error instanceof AdminForbiddenError) return <TeamOnly />;
   return (
     <div>
       <PageHeader eyebrow="Research data" title="Add research, check what the AI found, keep audiences current." sub="Files you upload here are trusted research. Input from anyone else waits in the review queue." />
@@ -34,29 +35,26 @@ function DataPage() {
           <TabsTrigger value="sources" className="rounded-full">Sources</TabsTrigger>
           <TabsTrigger value="review" className="rounded-full">Review queue</TabsTrigger>
           <RequestsTrigger />
+          <TabsTrigger value="team" className="rounded-full">Team</TabsTrigger>
           <TabsTrigger value="note" className="rounded-full">Add a note</TabsTrigger>
         </TabsList>
         <TabsContent value="upload"><UploadTab /></TabsContent>
         <TabsContent value="sources"><SourcesTab /></TabsContent>
         <TabsContent value="review"><ReviewTab /></TabsContent>
         <TabsContent value="requests"><RequestsTab /></TabsContent>
+        <TabsContent value="team"><TeamTab /></TabsContent>
         <TabsContent value="note"><NoteTab /></TabsContent>
       </Tabs>
     </div>
   );
 }
 
-function PasscodeGate({ onDone }: { onDone: () => void }) {
-  const [v, setV] = useState("");
+function TeamOnly() {
   return (
     <div className="mx-auto mt-16 max-w-md rounded-2xl border bg-card p-8">
       <ShieldCheck className="size-6" />
       <h1 className="mt-3 font-display text-2xl font-semibold">Research team only</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Enter the team passcode to manage research data.</p>
-      <form className="mt-5 flex gap-2" onSubmit={(e) => { e.preventDefault(); adminToken.set(v); onDone(); }}>
-        <input type="password" aria-label="Team passcode" value={v} onChange={(e) => setV(e.target.value)} className={field} autoFocus />
-        <Button type="submit" className="rounded-full">Continue</Button>
-      </form>
+      <p className="mt-1 text-sm text-muted-foreground">Managing research data is limited to admins. Ask a research team admin if you need access.</p>
     </div>
   );
 }
@@ -319,5 +317,43 @@ function RequestCard({ r, onSave, saving }: { r: StudyRequestItem; onSave: (v: {
         <Button size="sm" className="rounded-full" disabled={saving || reply === (r.teamNote ?? "")} onClick={() => onSave({ teamNote: reply })}>Send reply</Button>
       </div>
     </li>
+  );
+}
+
+function TeamTab() {
+  const qc = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: authMe });
+  const q = useQuery({ queryKey: ["admin", "users"], queryFn: adminApi.users });
+  const update = useMutation({ mutationFn: (v: { id: string; role?: "admin" | "user"; disabled?: boolean }) => adminApi.updateUser(v.id, { ...(v.role ? { role: v.role } : {}), ...(v.disabled !== undefined ? { disabled: v.disabled } : {}) }), onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }) });
+  const reset = useMutation({ mutationFn: (id: string) => adminApi.resetPassword(id) });
+  const [shown, setShown] = useState<{ email: string; pw: string } | null>(null);
+  if (q.isLoading) return <div className="mt-6"><LoadingBlock /></div>;
+  if (q.isError) return <div className="mt-6"><ErrorState onRetry={() => q.refetch()} /></div>;
+  const users: TeamUser[] = q.data ?? [];
+  return (
+    <div className="mt-6">
+      <p className="mb-3 text-sm text-muted-foreground">Everyone who has signed up. Admins can upload and approve research and answer study requests. There's no forgotten-password email: reset a password here and give the person the temporary one.</p>
+      {shown && <div role="status" className="mb-4 rounded-xl border border-mixed/40 bg-mixed-soft/50 p-4 text-sm">Temporary password for <span className="font-medium">{shown.email}</span>: <code className="rounded bg-card px-2 py-0.5 font-mono">{shown.pw}</code>. It's shown once. They'll be asked to choose their own at next sign-in. <button className="ml-2 underline" onClick={() => setShown(null)}>Dismiss</button></div>}
+      {(update.isError || reset.isError) && <p className="mb-3 text-sm text-risk">{((update.error ?? reset.error) as Error).message}</p>}
+      <div className="overflow-x-auto rounded-lg border bg-card">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b bg-muted/40"><tr>{["Person", "Role", "Last sign-in", ""].map((h) => <th key={h} className="eyebrow px-4 py-3">{h}</th>)}</tr></thead>
+          <tbody>{users.map((u) => {
+            const self = me.data?.user?.id === u.id;
+            return (
+              <tr key={u.id} className={cn("border-b last:border-0", u.disabled && "opacity-60")}>
+                <td className="px-4 py-3"><span className="font-medium">{u.name ?? u.email}</span>{self && <span className="ml-2 text-xs text-muted-foreground">(you)</span>}<span className="block text-xs text-muted-foreground">{u.email}{u.disabled ? " · disabled" : ""}</span></td>
+                <td className="px-4 py-3"><StatusBadge tone={u.role === "admin" ? "strong" : "neutral"}>{u.role === "admin" ? "Admin" : "User"}</StatusBadge></td>
+                <td className="px-4 py-3 text-xs text-muted-foreground">{u.lastLoginAt ? relativeTime(u.lastLoginAt) : "never"}</td>
+                <td className="px-4 py-3"><div className="flex flex-wrap justify-end gap-2">
+                  <Button size="sm" variant="outline" className="rounded-full" disabled={update.isPending} onClick={() => update.mutate({ id: u.id, role: u.role === "admin" ? "user" : "admin" })}>{u.role === "admin" ? "Make user" : "Make admin"}</Button>
+                  <Button size="sm" variant="outline" className="rounded-full" disabled={reset.isPending} onClick={async () => { const r = await reset.mutateAsync(u.id); setShown({ email: u.email, pw: r.temporaryPassword }); }}>Reset password</Button>
+                  {!self && <Button size="sm" variant="outline" className="rounded-full" disabled={update.isPending} onClick={() => update.mutate({ id: u.id, disabled: !u.disabled })}>{u.disabled ? "Enable" : "Disable"}</Button>}
+                </div></td>
+              </tr>);
+          })}</tbody>
+        </table>
+      </div>
+    </div>
   );
 }

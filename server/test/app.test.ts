@@ -10,7 +10,7 @@ beforeAll(async () => {
     INSERT INTO participants VALUES ('P001','S1','{}','2026-01-01');
     INSERT INTO sources(id,study_id,participant_id,source_type,origin,title,created_at) VALUES ('SRC1','S1','P001','cx_call','researcher_notes','t','2026-01-01');
     INSERT INTO evidence(source_id,participant_id,original_text,kind,provenance,theme,sentiment,created_at) VALUES ('SRC1','P001','x','said','participant_verbatim','t','neutral','2026-01-01');`);
-  server = createApp(db).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`;
+  server = createApp(db, { auth: { authDisabled: true } }).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`;
 });
 afterAll(() => server.close());
 const j = (p: string, init?: RequestInit) => fetch(base + p, { headers: { "content-type": "application/json" }, ...init }).then(async (r) => ({ status: r.status, body: await r.json() }));

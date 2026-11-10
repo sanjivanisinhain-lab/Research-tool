@@ -4,10 +4,13 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { MessageCircle, MonitorPlay, UserRound, UsersRound, Clock, Plus, MoreHorizontal, Sparkle, Database } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useProfile, useSavedWork, useSaveProfile } from "@/api/hooks";
+import { authApi, useAccountAction, useMe } from "@/api/auth";
+import { ChangePasswordDialog } from "./AuthGate";
+import { DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { ROLE_OPTIONS, roleLabel } from "@/lib/roleLens";
 import type { Role } from "@/types/research";
 import { cn } from "@/lib/utils";
-import { SimulatedDataBadge, relativeTime } from "./primitives";
+import { Logo, SimulatedDataBadge, relativeTime } from "./primitives";
 import { ProfileDialog } from "./ProfileDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { SavedWorkItem } from "@/types/research";
@@ -19,7 +22,7 @@ const NAV = [
   { to: "/audiences", label: "Audiences", icon: UsersRound, match: (p: string) => p.startsWith("/audiences") },
   { to: "/saved", label: "Saved work", icon: Clock, match: (p: string) => p.startsWith("/saved") },
   // Research-team data management only exists with the real backend
-  ...(IS_MOCK ? [] : [{ to: "/data", label: "Research data", icon: Database, match: (p: string) => p.startsWith("/data") }]),
+  { to: "/data", label: "Research data", icon: Database, match: (p: string) => p.startsWith("/data") },
 ] as const;
 
 export const WORK_ICON: Record<SavedWorkItem["type"], typeof MessageCircle> = {
@@ -29,13 +32,7 @@ export const WORK_ICON: Record<SavedWorkItem["type"], typeof MessageCircle> = {
   script_review: MessageCircle,
 };
 
-export function Logo({ inverted }: { inverted?: boolean }) {
-  return (
-    <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl", inverted ? "bg-brand-foreground text-brand" : "bg-foreground text-background")}>
-      <Sparkle className="size-4" />
-    </span>
-  );
-}
+export { Logo } from "./primitives";
 
 export function WorkLink({ item, children, className }: { item: SavedWorkItem; children: ReactNode; className?: string }) {
   const t = item.target;
@@ -50,6 +47,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const saveProfile = useSaveProfile();
   const saved = useSavedWork();
   const [editOpen, setEditOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
+  const me = useMe();
+  const logout = useAccountAction(() => authApi.logout());
+  const isAdmin = !IS_MOCK && me.data?.user?.role === "admin"; // the Research data area is for the research team
   const p = profile.data;
   const initials = roleLabel(p?.role).split(" ").map((w) => w[0]).join("").slice(0, 2);
 
@@ -65,7 +66,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Plus className="size-4" /><span className="hidden lg:inline">New question</span>
         </Link>
         <nav className="mt-5 space-y-0.5" aria-label="Main">
-          {NAV.map((n) => {
+          {NAV.filter((n) => n.to !== "/data" || isAdmin).map((n) => {
             const active = n.match(path);
             return (
               <Link key={n.to} to={n.to} title={n.label} aria-current={active ? "page" : undefined} className={cn("flex h-10 items-center justify-center gap-3 rounded-xl px-3 text-sm lg:justify-start", active ? "bg-card font-semibold shadow-sm" : "text-foreground/70 hover:bg-sidebar-accent hover:text-foreground")}>
@@ -108,6 +109,12 @@ export function AppShell({ children }: { children: ReactNode }) {
               <MoreHorizontal className="hidden size-4 text-muted-foreground lg:block" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="top">
+              {!IS_MOCK && me.data?.user && (
+                <>
+                  <DropdownMenuLabel className="font-normal"><span className="block truncate text-sm font-semibold">{me.data.user.name ?? me.data.user.email}</span><span className="block truncate text-xs text-muted-foreground">{me.data.user.email}{me.data.user.role === "admin" ? " · admin" : ""}</span></DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>Switch role · {roleLabel(p?.role)}</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
@@ -117,6 +124,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
               <DropdownMenuItem onSelect={() => setEditOpen(true)}>Edit profile</DropdownMenuItem>
+              {!IS_MOCK && me.data?.user && (
+                <>
+                  <DropdownMenuItem onSelect={() => setPwOpen(true)}>Change password</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => logout.mutate(undefined)}>Sign out</DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -125,6 +139,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="mx-auto w-full max-w-[1100px] px-6 py-10 md:px-10 md:py-14">{children}</div>
       </main>
       <ProfileDialog open={editOpen} onOpenChange={setEditOpen} />
+      <ChangePasswordDialog open={pwOpen} onOpenChange={setPwOpen} />
     </div>
   );
 }

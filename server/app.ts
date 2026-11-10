@@ -1,5 +1,6 @@
 import express from "express";
 import { audit, type Db } from "./db";
+import { setupAuth, type AuthOpts } from "./auth";
 import { ingestContribution } from "./ingest";
 import { processUpload } from "./upload";
 import { enqueueExtractions, enqueueRebuild, enqueueTranscription, retryJob } from "./jobs";
@@ -14,7 +15,7 @@ import { assessDesign } from "./ai/assess";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; adminToken?: string; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
@@ -24,14 +25,8 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.use(express.json({ limit: "25mb" })); // attachments and design images arrive as base64
 
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
+  setupAuth(app, db, opts.auth ?? {}); // everything registered after this line requires a signed-in user
 
-  // Optional shared admin passcode (set ADMIN_TOKEN). Contributions and the product API stay open.
-  app.use("/api/admin", (req, res, next) => {
-    if (!opts.adminToken || req.get("x-admin-token") === opts.adminToken) return next();
-    res.status(401).json({ error: "admin token required" });
-  });
-
-  // Upload one file. Body = the raw file; details in the query string. Processed immediately, AI extraction runs as a background job.
   // Recordings are streamed to disk (they can be large) and transcribed by a background job.
   app.put("/api/admin/upload", async (req, res, next) => {
     const ext = path.extname(String(req.query.filename ?? "")).toLowerCase();
@@ -58,6 +53,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       }
       enqueueTranscription(db, { path: file, sha256, study, product: String(q.product ?? "").slice(0, 80), kind: q.kind === "interview" ? "interview" : "cx_call",
         date: typeof q.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : null, names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) });
+      audit(db, "upload.by", { by: req.user!.id, status: "queued", kind: "recording" });
       res.status(202).json({ status: "queued", format: "recording", message: "Transcription queued. It runs in the background; check the status bar and the Sources tab.", ...empty, jobsQueued: 1 });
     });
     req.pipe(ws);
@@ -75,6 +71,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), termsPath: opts.termsPath,
     });
     const queued = result.sourcesAdded ? enqueueExtractions(db) : 0;
+    audit(db, "upload.by", { by: req.user!.id, status: result.status, added: result.sourcesAdded });
     res.status(result.status === "failed" || result.status === "unsupported" ? 422 : 200).json({ ...result, jobsQueued: queued });
   });
 
@@ -96,9 +93,10 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       aiConfigured: !!opts.ai,
     });
   });
-  app.post("/api/admin/jobs/rebuild-audiences", (_req, res) => {
+  app.post("/api/admin/jobs/rebuild-audiences", (req, res) => {
     const approved = (db.prepare("SELECT COUNT(*) n FROM evidence WHERE status='approved'").get() as { n: number }).n;
     if (!approved) return res.status(409).json({ error: "No approved evidence yet." });
+    audit(db, "rebuild_audiences.by", { by: req.user!.id });
     res.status(202).json({ jobId: enqueueRebuild(db) });
   });
   app.post("/api/admin/jobs/:id/retry", (req, res) => (retryJob(db, Number(req.params.id)) ? res.json({ ok: true }) : res.status(404).json({ error: "no failed job with that id" })));
@@ -115,7 +113,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const r = db.prepare("UPDATE study_requests SET status=COALESCE(?,status), team_note=COALESCE(?,team_note), updated_at=? WHERE id=?")
       .run(b.status ?? null, typeof b.teamNote === "string" ? b.teamNote.slice(0, 2000) : null, new Date().toISOString(), req.params.id);
     if (!r.changes) return res.status(404).json({ error: "not found" });
-    audit(db, "study_request.update", { id: req.params.id, status: b.status ?? null });
+    audit(db, "study_request.update", { id: req.params.id, status: b.status ?? null, by: req.user!.id });
     res.json({ id: req.params.id });
   });
 
@@ -145,9 +143,9 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   const setStatus = (status: "approved" | "rejected") => (req: express.Request, res: express.Response) => {
     const id = Number(req.params.id);
     const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
-    const r = db.prepare("UPDATE evidence SET status=?, review_note=COALESCE(?, review_note) WHERE id=?").run(status, note, id);
+    const r = db.prepare("UPDATE evidence SET status=?, review_note=COALESCE(?, review_note), reviewed_by=?, reviewed_at=? WHERE id=?").run(status, note, req.user!.id, new Date().toISOString(), id);
     if (!r.changes) return res.status(404).json({ error: "not found" });
-    audit(db, `evidence.${status}`, { id, note });
+    audit(db, `evidence.${status}`, { id, note, by: req.user!.id });
     res.json({ id, status });
   };
   app.post("/api/admin/evidence/:id/approve", setStatus("approved"));
@@ -162,7 +160,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const r = db.prepare("UPDATE evidence SET translation=COALESCE(?,translation), theme=COALESCE(?,theme), sentiment=COALESCE(?,sentiment) WHERE id=?")
       .run(typeof b.translation === "string" ? b.translation : null, typeof b.theme === "string" ? b.theme.toLowerCase() : null, b.sentiment ?? null, id);
     if (!r.changes) return res.status(404).json({ error: "not found" });
-    audit(db, "evidence.edit", { id, fields: Object.keys(b) });
+    audit(db, "evidence.edit", { id, fields: Object.keys(b), by: req.user!.id });
     res.json({ id });
   });
 
@@ -170,7 +168,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.post("/api/admin/sources/:id/approve-all", (req, res) => {
     const r = db.prepare("UPDATE evidence SET status='approved' WHERE source_id=? AND status='pending'").run(req.params.id);
     db.prepare("UPDATE sources SET status='approved' WHERE id=?").run(req.params.id);
-    audit(db, "source.approve_all", { source: req.params.id, evidence: Number(r.changes) });
+    audit(db, "source.approve_all", { source: req.params.id, evidence: Number(r.changes), by: req.user!.id });
     res.json({ approved: Number(r.changes) });
   });
 
@@ -181,25 +179,30 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const kind = req.body?.kind === "interview" ? "interview" : "cx_call";
     if (typeof text !== "string" || text.trim().length < 10) return res.status(400).json({ error: "text required (min 10 characters)" });
     const r = ingestContribution(db, text, { kind, termsPath: opts.termsPath });
+    if (r) audit(db, "contribution.by", { sourceId: r.sourceId, by: req.user!.id });
     if (!r) return res.status(409).json({ error: "duplicate or empty contribution" });
     enqueueExtractions(db); // read by the AI in the background; the evidence then waits in the review queue
     res.status(202).json({ received: true, status: "pending_review" });
   });
 
+  // Answers, plans and assessments belong to the person who created them (admins can open any, to support the team).
+  const canSee = (req: express.Request, owner: string | null) => req.user!.role === "admin" || owner === req.user!.id;
+  const answerOwner = (id: string) => (db.prepare("SELECT user_id u FROM answers WHERE id=?").get(id) as { u: string | null } | undefined);
+
   // ---------- Study requests: a user asks the research team to run a planned study ----------
   const requestRow = (answerId: string) => db.prepare("SELECT id, status, team_note AS teamNote, note, created_at AS createdAt, updated_at AS updatedAt FROM study_requests WHERE answer_id=?").get(answerId);
-  app.get("/api/answers/:id/study-request", (req, res) => res.json(requestRow(req.params.id) ?? null));
+  app.get("/api/answers/:id/study-request", (req, res) => { const o = answerOwner(req.params.id); return !o || !canSee(req, o.u) ? res.status(404).end() : res.json(requestRow(req.params.id) ?? null); });
   app.post("/api/answers/:id/study-request", (req, res) => {
-    const row = db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(req.params.id) as { j: string } | undefined;
-    if (!row) return res.status(404).json({ error: "plan not found" });
+    const row = db.prepare("SELECT answer_json j, user_id u FROM answers WHERE id=?").get(req.params.id) as { j: string; u: string | null } | undefined;
+    if (!row || !canSee(req, row.u)) return res.status(404).json({ error: "plan not found" });
     const answer = JSON.parse(row.j) as { variant: string; question: string; headline: string; audience: AudienceRef[]; studyPlan?: unknown; known?: unknown; unknowns?: unknown };
     if (answer.variant !== "study_plan" || !answer.studyPlan) return res.status(400).json({ error: "only a study plan can be requested" });
     if (requestRow(req.params.id)) return res.status(409).json({ error: "already requested", request: requestRow(req.params.id) });
-    const profile = db.prepare("SELECT role, team, area, name FROM profiles WHERE id='me'").get() ?? {};
+    const profile = { ...(db.prepare("SELECT role, team, area, name FROM profiles WHERE id=?").get(req.user!.id) as object | undefined), name: req.user!.name, email: req.user!.email };
     const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 2000) : "";
     const id = "req-" + crypto.randomBytes(4).toString("hex"); const now = new Date().toISOString();
-    db.prepare("INSERT INTO study_requests(id,answer_id,title,plan_json,requester_json,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
-      .run(id, req.params.id, answer.headline.replace(/^Recommended next test: /, ""), JSON.stringify({ question: answer.question, audience: answer.audience, studyPlan: answer.studyPlan, known: answer.known ?? [], unknowns: answer.unknowns ?? [] }), JSON.stringify(profile), note || null, now, now);
+    db.prepare("INSERT INTO study_requests(id,answer_id,title,plan_json,requester_json,note,created_at,updated_at,user_id) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(id, req.params.id, answer.headline.replace(/^Recommended next test: /, ""), JSON.stringify({ question: answer.question, audience: answer.audience, studyPlan: answer.studyPlan, known: answer.known ?? [], unknowns: answer.unknowns ?? [] }), JSON.stringify(profile), note || null, now, now, req.user!.id);
     audit(db, "study_request.create", { id, answerId: req.params.id });
     res.status(201).json(requestRow(req.params.id));
   });
@@ -227,15 +230,15 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     };
   }
 
-  app.get("/api/profile", (_req, res) => {
-    const r = db.prepare("SELECT role,team,area,note,name FROM profiles WHERE id='me'").get();
+  app.get("/api/profile", (req, res) => {
+    const r = db.prepare("SELECT role,team,area,note,name FROM profiles WHERE id=?").get(req.user!.id);
     return r ? res.json(r) : res.status(404).end();
   });
   app.put("/api/profile", (req, res) => {
     const b = req.body ?? {};
     if (!["designer", "researcher", "pm", "marketing", "cx", "other"].includes(b.role) || typeof b.team !== "string" || typeof b.area !== "string") return res.status(400).json({ error: "invalid profile" });
-    db.prepare("INSERT INTO profiles(id,role,team,area,note,name,updated_at) VALUES ('me',?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET role=excluded.role,team=excluded.team,area=excluded.area,note=excluded.note,name=excluded.name,updated_at=excluded.updated_at")
-      .run(b.role, b.team.slice(0, 120), b.area.slice(0, 120), b.note ?? null, b.name ?? null, new Date().toISOString());
+    db.prepare("INSERT INTO profiles(id,role,team,area,note,name,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET role=excluded.role,team=excluded.team,area=excluded.area,note=excluded.note,name=excluded.name,updated_at=excluded.updated_at")
+      .run(req.user!.id, b.role, b.team.slice(0, 120), b.area.slice(0, 120), b.note ?? null, b.name ?? null, new Date().toISOString());
     res.json({ role: b.role, team: b.team, area: b.area, note: b.note, name: b.name });
   });
 
@@ -266,12 +269,13 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       const a = b.mode === "compare"
         ? await compareAudiences(db, opts.ai, { question: b.question.trim(), audience, includeUnreviewed: opts.includeUnreviewed })
         : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, attachments: Array.isArray(b.attachments) ? b.attachments : [], ...(typeof b.contextAnswerId === "string" ? { contextAnswerId: b.contextAnswerId } : {}), includeUnreviewed: opts.includeUnreviewed });
+      db.prepare("UPDATE answers SET user_id=? WHERE id=?").run(req.user!.id, a.id);
       res.json({ id: a.id });
     } catch (e) { console.error("answer failed:", (e as Error).message); res.status(502).json({ error: "answer generation failed" }); }
   });
   app.get("/api/answers/:id", (req, res) => {
-    const r = db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(req.params.id) as { j: string } | undefined;
-    return r ? res.type("json").send(r.j) : res.status(404).end();
+    const r = db.prepare("SELECT answer_json j, user_id u FROM answers WHERE id=?").get(req.params.id) as { j: string; u: string | null } | undefined;
+    return r && canSee(req, r.u) ? res.type("json").send(r.j) : res.status(404).end();
   });
 
   app.get("/api/evidence", (req, res) => {
@@ -292,12 +296,12 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     res.json(out);
   });
 
-  app.get("/api/saved-work", (_req, res) => {
+  app.get("/api/saved-work", (req, res) => {
     const names = (j: string) => (JSON.parse(j) as AudienceRef[]).map((x) => x.name).join(" + ") || "All users";
-    const answers = (db.prepare("SELECT id,question,variant,audience_json a,created_at c FROM answers ORDER BY created_at DESC LIMIT 100").all() as any[]).map((r) => ({
+    const answers = (db.prepare("SELECT id,question,variant,audience_json a,created_at c FROM answers WHERE user_id=? ORDER BY created_at DESC LIMIT 100").all(req.user!.id) as any[]).map((r) => ({
       id: r.id, title: r.question.slice(0, 90), type: r.variant === "script_review" ? "script_review" : "answer", audience: names(r.a),
       status: r.variant === "insufficient" ? "Insufficient evidence" : r.variant === "script_review" ? "Reviewed" : r.variant === "study_plan" ? "Study plan" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } }));
-    const assessments = (db.prepare("SELECT id,task,audience_json a,created_at c,assessment_json j FROM assessments ORDER BY created_at DESC LIMIT 100").all() as any[]).map((r) => ({
+    const assessments = (db.prepare("SELECT id,task,audience_json a,created_at c,assessment_json j FROM assessments WHERE user_id=? ORDER BY created_at DESC LIMIT 100").all(req.user!.id) as any[]).map((r) => ({
       id: r.id, title: (JSON.parse(r.j).title as string) || r.task.slice(0, 90), type: "assessment", audience: names(r.a), status: "Prediction", updatedAt: r.c, target: { to: "/assess/$id", id: r.id } }));
     res.json([...answers, ...assessments].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).slice(0, 100));
   });
@@ -307,6 +311,8 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     if (typeof q !== "string" || !q.trim() || q.length > 2000) return res.status(400).json({ error: "question required" });
     if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
     try {
+      const o = answerOwner(req.params.id);
+      if (!o || !canSee(req, o.u)) return res.status(404).end();
       const fu = await followUp(db, opts.ai, req.params.id, q.trim());
       return fu ? res.json(fu) : res.status(404).end();
     } catch (e) { console.error("follow-up failed:", (e as Error).message); res.status(502).json({ error: "follow-up failed" }); }
@@ -325,17 +331,18 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
     try {
       const a = await assessDesign(db, opts.ai, { image: { data, mimeType: proto.mimeType, name: String(proto.name ?? "design") }, task: b.task.trim(), ...(typeof b.goal === "string" && b.goal.trim() ? { goal: b.goal.trim() } : {}), audience, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}), mediaDir: opts.assetsDir ?? "data/assessments" });
+      db.prepare("UPDATE assessments SET user_id=? WHERE id=?").run(req.user!.id, a.id);
       res.json({ id: a.id });
     } catch (e) { console.error("assessment failed:", (e as Error).message); res.status(502).json({ error: "assessment failed" }); }
   });
   app.get("/api/assessments/:id/image", (req, res) => {
-    const r = db.prepare("SELECT image_path p, image_mime m FROM assessments WHERE id=?").get(req.params.id) as { p: string | null; m: string | null } | undefined;
-    if (!r?.p || !fs.existsSync(r.p)) return res.status(404).end();
+    const r = db.prepare("SELECT image_path p, image_mime m, user_id u FROM assessments WHERE id=?").get(req.params.id) as { p: string | null; m: string | null; u: string | null } | undefined;
+    if (!r?.p || !canSee(req, r.u) || !fs.existsSync(r.p)) return res.status(404).end();
     res.type(r.m ?? "image/png").send(fs.readFileSync(r.p));
   });
   app.get("/api/assessments/:id", (req, res) => {
-    const r = db.prepare("SELECT assessment_json j FROM assessments WHERE id=?").get(req.params.id) as { j: string } | undefined;
-    return r ? res.type("json").send(r.j) : res.status(404).end();
+    const r = db.prepare("SELECT assessment_json j, user_id u FROM assessments WHERE id=?").get(req.params.id) as { j: string; u: string | null } | undefined;
+    return r && canSee(req, r.u) ? res.type("json").send(r.j) : res.status(404).end();
   });
   for (const p of ["/api/personas/:id/messages"]) app.post(p, (_req, res) => res.status(501).json({ error: "not implemented yet" }));
   app.get("/api/personas/:id/conversation", (_req, res) => res.json([]));

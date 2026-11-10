@@ -1,16 +1,13 @@
 // Research-team data API (upload, sources, review queue, jobs). HTTP only: there is no mock for real data management.
 const BASE = import.meta.env["VITE_API_BASE_URL"] ?? "";
-const KEY = "research-hub-admin-token";
 
-export class AdminAuthError extends Error {}
-export const adminToken = {
-  get: () => { try { return sessionStorage.getItem(KEY) ?? ""; } catch { return ""; } },
-  set: (t: string) => { try { sessionStorage.setItem(KEY, t); } catch { /* session storage unavailable */ } },
-};
+export class AdminAuthError extends Error {} // signed out
+export class AdminForbiddenError extends Error {} // signed in, but not on the research team
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { ...init, headers: { ...(init.headers ?? {}), ...(adminToken.get() ? { "x-admin-token": adminToken.get() } : {}) } });
-  if (res.status === 401) throw new AdminAuthError("Admin passcode required");
+  const res = await fetch(`${BASE}${path}`, { ...init, headers: { "x-requested-with": "research-hub", ...(init.headers ?? {}) } });
+  if (res.status === 401) throw new AdminAuthError("Sign in required");
+  if (res.status === 403) throw new AdminForbiddenError("Research team only");
   const body = await res.json().catch(() => ({}));
   if (!res.ok && res.status !== 422) throw new Error((body as { error?: string }).error ?? `Request failed (${res.status})`);
   return body as T;
@@ -21,6 +18,7 @@ export type Redaction = { names: number; phones: number; emails: number; places:
 export type UploadResult = { status: "processed" | "partial" | "failed" | "unsupported" | "queued"; message: string; format?: string; sourcesAdded: number; sourcesSkipped: number; participantsAdded: number; redaction: Redaction; jobsQueued?: number };
 export type UploadMeta = { study: string; product: string; kind: "cx_call" | "interview"; date: string; names: string };
 export type AdminSource = { id: string; title: string; sourceType: string; origin: string; status: string; submittedBy: "research_team" | "contributor"; date: string | null; quality: string | null; language: string; redaction: Redaction; study: string; participantId: string; createdAt: string; evidence: number; pendingEvidence: number; job: string | null };
+export type TeamUser = { id: string; email: string; name: string | null; role: "admin" | "user"; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null };
 export type JobsInfo = { counts: { status: string; n: number }[]; transcriptions: { id: number; status: string; note: string; study: string; createdAt: string }[]; recentFailures: { id: number; kind: string; sourceId: string | null; error: string }[]; aiConfigured: boolean };
 export type ReviewItem = { id: number; participantId: string; quote: string; translation: string | null; kind: "said" | "did"; provenance: string; theme: string; sentiment: string; flags: string; sourceType: string; date: string | null; originalLanguage: string; sourceTitle: string; quality: string | null };
 
@@ -46,5 +44,8 @@ export const adminApi = {
   approveSource: (id: string) => call<{ approved: number }>(`/api/admin/sources/${id}/approve-all`, json("POST")),
   studyRequests: () => call<StudyRequestItem[]>("/api/admin/study-requests"),
   updateStudyRequest: (id: string, patch: { status?: StudyRequestItem["status"]; teamNote?: string }) => call(`/api/admin/study-requests/${id}`, json("PATCH", patch)),
+  users: () => call<TeamUser[]>("/api/admin/users"),
+  updateUser: (id: string, patch: { role?: "admin" | "user"; disabled?: boolean }) => call(`/api/admin/users/${id}`, json("PATCH", patch)),
+  resetPassword: (id: string) => call<{ temporaryPassword: string }>(`/api/admin/users/${id}/reset-password`, json("POST", {})),
   contribute: (text: string, kind: "cx_call" | "interview") => call<{ received: boolean }>("/api/contributions", json("POST", { text, kind })),
 };

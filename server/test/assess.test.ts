@@ -37,7 +37,7 @@ const ai = new MockProvider((req) => {
     { index: 2, signal: "risk", summary: "timer feels pushy", evidence_ids: ids.slice(-2).concat([99999]) }],
     signals: ids.map((i) => ({ evidence_id: i, signal: "positive" })), unknowns: [{ title: "u", body: "b" }], implications: imps };
 });
-beforeAll(() => { seed(); server = createApp(db, { ai, assetsDir: dir }).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`; });
+beforeAll(() => { seed(); server = createApp(db, { auth: { authDisabled: true }, ai, assetsDir: dir }).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`; });
 afterAll(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 const post = (body: unknown) => fetch(`${base}/api/assessments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const upload = { kind: "upload", name: "card.png", mimeType: "image/png", data: PNG.toString("base64") };
