@@ -4,6 +4,22 @@ import { openDb } from "./db";
 import { docxToText, ingestCallsCsv, ingestTranscript } from "./ingest";
 
 const [cmd, kind, file, ...rest] = process.argv.slice(2);
+if (cmd === "extract") {
+  const { extractSource } = await import("./ai/extract");
+  const { providerFromEnv } = await import("./ai/provider");
+  const db0 = openDb();
+  const limit = Number(process.argv[process.argv.indexOf("--limit") + 1]) || 1e9;
+  const type = process.argv.includes("--type") ? process.argv[process.argv.indexOf("--type") + 1] : null;
+  const rows = db0.prepare("SELECT id FROM sources WHERE (? IS NULL OR source_type=?) ORDER BY created_at, id").all(type, type) as { id: string }[];
+  const ai = providerFromEnv();
+  let n = 0;
+  for (const { id } of rows.slice(0, limit)) {
+    try { const r = await extractSource(db0, ai, id); console.log(JSON.stringify(r)); n++; }
+    catch (e) { console.error(id, (e as Error).message); }
+  }
+  console.log("done", n);
+  process.exit(0);
+}
 const flag = (n: string) => { const i = rest.indexOf(`--${n}`); return i >= 0 ? rest[i + 1] : undefined; };
 if (cmd !== "ingest" || !kind || !file) { console.error("usage: ingest <kind> <file> --study NAME --product NAME"); process.exit(1); }
 const db = openDb();

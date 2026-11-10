@@ -55,6 +55,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  db.exec(SCHEMA_V2);
   return db;
 }
 
@@ -65,3 +66,33 @@ export function audit(db: Db, action: string, detail: unknown) {
     JSON.stringify(detail),
   );
 }
+
+export const SCHEMA_V2 = `
+CREATE TABLE IF NOT EXISTS evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  participant_id TEXT NOT NULL REFERENCES participants(id),
+  utterance_id INTEGER REFERENCES utterances(id),
+  original_text TEXT NOT NULL,       -- exact substring of a redacted utterance (verified server-side)
+  translation TEXT,                  -- English, never presented as verbatim
+  kind TEXT NOT NULL CHECK (kind IN ('said','did')),
+  provenance TEXT NOT NULL CHECK (provenance IN ('participant_verbatim','researcher_note')),
+  theme TEXT NOT NULL,
+  sentiment TEXT NOT NULL CHECK (sentiment IN ('positive','negative','neutral','mixed')),
+  pain_point TEXT, need TEXT, job_to_be_done TEXT, emotion TEXT,
+  flags TEXT NOT NULL DEFAULT '',    -- e.g. speaker_uncertain, noisy_asr
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  review_note TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (source_id, original_text)
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_status ON evidence(status);
+CREATE TABLE IF NOT EXISTS extraction_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  model TEXT NOT NULL, prompt_version TEXT NOT NULL,
+  proposed INTEGER NOT NULL, kept INTEGER NOT NULL, dropped_unverified INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (source_id, model, prompt_version)  -- caching key: no repeat AI call for the same source/model/prompt
+);
+`;
