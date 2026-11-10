@@ -42,7 +42,7 @@ function ensureStudy(db: Db, name: string, product: string): string {
 }
 
 function nextParticipantId(db: Db): string {
-  const row = db.prepare("SELECT COUNT(*) AS n FROM participants").get() as { n: number };
+  const row = db.prepare("SELECT COALESCE(MAX(CAST(SUBSTR(id,2) AS INTEGER)),0) AS n FROM participants").get() as { n: number };
   return "P" + String(row.n + 1).padStart(3, "0");
 }
 
@@ -124,12 +124,20 @@ export function parseSpeakerBlocks(raw: string): { speaker: string; text: string
 }
 
 /** Interview transcript with "Interviewer:" / "Participant:" turns, optionally several "File N" interviews in one document. */
+// Joined exports separate recordings with "File N" lines and/or a transcription-tool marker such as
+// "now for this Here is the verbatim transcript for the audio file:". Each segment is a separate interview.
+const TOOL_MARKER = /(?:now for this[\s-]*)?Here is the verbatim transcript for the audio(?: file| provided)?\s*:/gi;
 export function splitInterviews(raw: string): string[] {
-  const parts = raw.split(/^\s*File\s+\d+\s*$/gim).map((s) => s.trim()).filter(Boolean);
+  const parts = raw.split(/^\s*File\s+\d+\s*$/gim).flatMap((p) => p.split(TOOL_MARKER)).map((s) => s.trim()).filter(Boolean);
   return parts.length ? parts : [raw.trim()];
 }
 export function parseLabelledTurns(raw: string): { speaker: string; text: string }[] {
   const turns: { speaker: string; text: string }[] = [];
+  if (!/^(Interviewer|Participant)\s*:/im.test(raw) && /Speaker\s+\d+\s*:/.test(raw)) {
+    // Unlabelled call transcript embedded in the document: "Speaker 1: ... Speaker 2: ..." on one line
+    for (const m of raw.matchAll(/Speaker\s+(\d+)\s*:\s*([\s\S]*?)(?=Speaker\s+\d+\s*:|$)/g)) if (m[2].trim()) turns.push({ speaker: `speaker_${m[1]}`, text: m[2].trim() });
+    return turns;
+  }
   for (const line of raw.split(/\n/)) {
     const m = /^(Interviewer|Participant)\s*:\s*(.*)$/i.exec(line.trim());
     if (m) turns.push({ speaker: m[1].toLowerCase(), text: m[2].trim() });

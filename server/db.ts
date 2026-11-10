@@ -57,6 +57,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   db.exec(SCHEMA);
   db.exec(SCHEMA_V2);
   db.exec(SCHEMA_V3);
+  migrateV4(db);
   return db;
 }
 
@@ -130,3 +131,38 @@ CREATE TABLE IF NOT EXISTS persona_trait_evidence (
   PRIMARY KEY (trait_id, evidence_id)
 );
 `;
+
+export const SCHEMA_V4 = `
+CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
+  original_text, translation, theme, canonical_theme, pain_point, need,
+  content='evidence', content_rowid='id', tokenize='unicode61');
+CREATE TRIGGER IF NOT EXISTS ev_ai AFTER INSERT ON evidence BEGIN
+  INSERT INTO evidence_fts(rowid, original_text, translation, theme, canonical_theme, pain_point, need)
+  VALUES (new.id, new.original_text, new.translation, new.theme, new.canonical_theme, new.pain_point, new.need);
+END;
+CREATE TRIGGER IF NOT EXISTS ev_ad AFTER DELETE ON evidence BEGIN
+  INSERT INTO evidence_fts(evidence_fts, rowid, original_text, translation, theme, canonical_theme, pain_point, need)
+  VALUES ('delete', old.id, old.original_text, old.translation, old.theme, old.canonical_theme, old.pain_point, old.need);
+END;
+CREATE TRIGGER IF NOT EXISTS ev_au AFTER UPDATE ON evidence BEGIN
+  INSERT INTO evidence_fts(evidence_fts, rowid, original_text, translation, theme, canonical_theme, pain_point, need)
+  VALUES ('delete', old.id, old.original_text, old.translation, old.theme, old.canonical_theme, old.pain_point, old.need);
+  INSERT INTO evidence_fts(rowid, original_text, translation, theme, canonical_theme, pain_point, need)
+  VALUES (new.id, new.original_text, new.translation, new.theme, new.canonical_theme, new.pain_point, new.need);
+END;
+CREATE TABLE IF NOT EXISTS answers (
+  id TEXT PRIMARY KEY, question TEXT NOT NULL, variant TEXT NOT NULL, audience_json TEXT NOT NULL,
+  includes_unreviewed INTEGER NOT NULL DEFAULT 0, answer_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS profiles (
+  id TEXT PRIMARY KEY, role TEXT NOT NULL, team TEXT NOT NULL, area TEXT NOT NULL, note TEXT, name TEXT, updated_at TEXT NOT NULL
+);
+`;
+
+/** Adds the canonical_theme column on databases created before it existed, then (re)builds the search index. */
+export function migrateV4(db: Db) {
+  const cols = db.prepare("PRAGMA table_info(evidence)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "canonical_theme")) db.exec("ALTER TABLE evidence ADD COLUMN canonical_theme TEXT");
+  db.exec(SCHEMA_V4);
+  db.exec("INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')");
+}

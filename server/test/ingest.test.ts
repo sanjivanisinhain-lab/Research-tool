@@ -87,6 +87,14 @@ describe("transcripts", () => {
     expect(noisy.sourcesAdded).toBe(1);
     expect(db.prepare("SELECT quality FROM sources WHERE quality IS NOT NULL").all()).toEqual([{ quality: "noisy_asr" }]);
   });
+  it("splits joined exports on tool markers and parses embedded unlabelled calls", () => {
+    const db = openDb(":memory:");
+    const raw = "Interviewer: hi one\nParticipant: answer one now for this Here is the verbatim transcript for the audio file:\nInterviewer: hi two\nParticipant: answer two now for this- Here is the verbatim transcript for the audio provided: Speaker 1: Hello Speaker 2: Haan ji";
+    const res = ingestTranscript(db, raw, { studyName: "Joined", product: "F", format: "labelled" });
+    expect(res.participantsAdded).toBe(3);
+    expect(JSON.stringify(db.prepare("SELECT text FROM utterances").all())).not.toContain("Here is the verbatim");
+    expect(db.prepare("SELECT speaker FROM utterances WHERE speaker LIKE 'speaker_%'").all()).toEqual([{ speaker: "speaker_1" }, { speaker: "speaker_2" }]);
+  });
   it("detects language", () => {
     expect(detectLanguage("I like this very much")).toBe("en");
     expect(detectLanguage("mujhe yeh nahi chahiye kyunki main usko pasand nahi karti")).toBe("hinglish");
