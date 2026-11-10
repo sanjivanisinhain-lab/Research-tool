@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Server } from "node:http";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { openDb } from "../db";
 import { createApp } from "../app";
 import { detectTranscriptFormat } from "../upload";
@@ -32,11 +32,17 @@ describe("upload endpoint", () => {
     expect(body.message).toMatch(/already imported/i);
   });
   it("handles Excel sheets, skipping sheets without a Notes column and saying so", async () => {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Name", "Notes"], ["Ravi Rao", "Orders mostly online, delivery on time"]]), "Calls");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Totals"], [5]]), "Summary");
-    const r = await put("study=Xl&filename=x.xlsx", XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Calls").addRows([["Name", "Notes"], ["Ravi Rao", "Orders mostly online, delivery on time"]]);
+    wb.addWorksheet("Summary").addRows([["Totals"], [5]]);
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    const r = await put("study=Xl&filename=x.xlsx", buf);
     expect(await r.json()).toMatchObject({ status: "partial", sourcesAdded: 1 });
+    expect(JSON.stringify(db.prepare("SELECT text FROM utterances").all())).not.toContain("Ravi");
+  });
+  it("asks for .xlsx when given a legacy .xls", async () => {
+    const r = await put("study=Xl&filename=old.xls", Buffer.from("x"));
+    expect(r.status).toBe(422); expect((await r.json()).message).toMatch(/xlsx/);
   });
   it("reports unsupported and unusable files clearly, never silently", async () => {
     const av = await put("study=S&filename=call.mp3", Buffer.from("x"));

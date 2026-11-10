@@ -4,6 +4,38 @@ import { openDb } from "./db";
 import { docxToText, ingestCallsCsv, ingestTranscript } from "./ingest";
 
 const [cmd, kind, file, ...rest] = process.argv.slice(2);
+if (cmd === "backup" || cmd === "verify-backup" || cmd === "restore") {
+  const { createBackup, verifyBackup, restoreBackup } = await import("./backup");
+  const { loadConfig } = await import("./config");
+  const cfg = loadConfig(process.env); const pass = process.env["BACKUP_PASSPHRASE"] || undefined;
+  const paths = { dbPath: cfg.dbPath, termsPath: cfg.termsPath, assetsDir: cfg.assetsDir };
+  const dir = process.env["BACKUP_DIR"] ?? `${cfg.dataDir}/backups`;
+  try {
+    if (cmd === "backup") { const r = createBackup(paths, { outDir: dir, ...(pass ? { passphrase: pass } : {}), keep: Number(process.env["BACKUP_KEEP"] ?? 14) }); console.log(`Backup written: ${r.file}${pass ? " (encrypted)" : " (NOT encrypted: set BACKUP_PASSPHRASE)"}\n`, JSON.stringify(r.manifest.counts)); }
+    else if (cmd === "verify-backup") { const r = verifyBackup(kind!, pass); console.log(r.ok ? `OK: backup is intact. ${JSON.stringify(r.counts)}` : `PROBLEMS:\n - ${r.problems.join("\n - ")}`); process.exit(r.ok ? 0 : 1); }
+    else { const r = restoreBackup(kind!, paths, { ...(pass ? { passphrase: pass } : {}), force: process.argv.includes("--force") }); console.log(`Restored. ${JSON.stringify(r.counts)}${r.movedTo ? `\nPrevious database kept at ${r.movedTo}` : ""}`); }
+  } catch (e) { console.error((e as Error).message); process.exit(1); }
+  process.exit(0);
+}
+if (cmd === "reset-password" || cmd === "make-admin") {
+  // Recovery from the command line on the server itself (for example when the only admin forgot their password).
+  const { openDb: open2, audit } = await import("./db");
+  const { hashPassword } = await import("./auth");
+  const crypto = await import("node:crypto");
+  const { loadConfig } = await import("./config");
+  const d = open2(loadConfig(process.env).dbPath);
+  const email = (kind ?? "").trim().toLowerCase();
+  const u = d.prepare("SELECT id FROM users WHERE email=?").get(email) as { id: string } | undefined;
+  if (!u) { console.error(`No account with the email ${email || "(none given)"}.`); process.exit(1); }
+  if (cmd === "make-admin") { d.prepare("UPDATE users SET role='admin', disabled=0 WHERE id=?").run(u.id); audit(d, "cli.make_admin", { userId: u.id }); console.log(`${email} is now an admin.`); }
+  else {
+    const temp = crypto.randomBytes(9).toString("base64url");
+    d.prepare("UPDATE users SET password_hash=?, must_change_password=1, disabled=0 WHERE id=?").run(hashPassword(temp), u.id);
+    d.prepare("DELETE FROM sessions WHERE user_id=?").run(u.id); audit(d, "cli.password_reset", { userId: u.id });
+    console.log(`Temporary password for ${email}: ${temp}\nThey must choose their own at next sign-in.`);
+  }
+  process.exit(0);
+}
 if (cmd === "apply-trust-policy") {
   // Evidence extracted from research-team sources is trusted; approve any that is still pending (logged).
   const { audit } = await import("./db");
@@ -47,7 +79,7 @@ const flag = (n: string) => { const i = rest.indexOf(`--${n}`); return i >= 0 ? 
 if (cmd !== "ingest" || !kind || !file) { console.error("usage: ingest <kind> <file> --study NAME --product NAME"); process.exit(1); }
 const db = openDb();
 const submittedBy = process.argv.includes("--contributor") ? "contributor" as const : "research_team" as const;
-const termsPath = process.env.REDACTION_TERMS_PATH ?? "data/redaction-terms.json";
+const termsPath = process.env.REDACTION_TERMS_PATH ?? `${process.env.DATA_DIR ?? "data"}/redaction-terms.json`;
 const study = flag("study") ?? "Untitled study";
 const product = flag("product") ?? "";
 const names = (flag("names") ?? "").split(",").map((s) => s.trim()).filter(Boolean);

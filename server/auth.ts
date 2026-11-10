@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Express, NextFunction, Request, Response } from "express";
 import { audit, type Db } from "./db";
+import { slidingWindow } from "./limits";
 
 export type AuthUser = { id: string; email: string; name: string | null; role: "admin" | "user"; mustChangePassword: boolean };
 declare global { namespace Express { interface Request { user?: AuthUser } } }
@@ -55,6 +56,8 @@ export function setupAuth(app: Express, db: Db, o: AuthOpts) {
   const days = o.sessionDays ?? 14;
   const failures = new Map<string, { n: number; until: number }>(); // login throttling, per ip+email
   const keyOf = (req: Request, email: string) => `${req.ip}|${email.toLowerCase()}`;
+  const signupsPerIp = slidingWindow(3_600_000, 10);   // account flooding
+  const loginsPerIp = slidingWindow(15 * 60_000, 60);   // password guessing across many emails; also bounds scrypt CPU
 
   const cookieAttrs = (maxAgeSec: number) => `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${o.cookieSecure ? "; Secure" : ""}`;
   function startSession(res: Response, userId: string) {
@@ -68,6 +71,8 @@ export function setupAuth(app: Express, db: Db, o: AuthOpts) {
   // security headers + session loading + CSRF guard
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("Referrer-Policy", "same-origin");
+    if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store"); // private data must never sit in a shared cache
+    if (o.cookieSecure) res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
     if (o.authDisabled) { req.user = { id: "local", email: "local@localhost", name: "Local", role: "admin", mustChangePassword: false }; return next(); }
     const token = parseCookie(req, COOKIE);
     if (token) {
@@ -88,6 +93,8 @@ export function setupAuth(app: Express, db: Db, o: AuthOpts) {
   });
 
   app.post("/api/auth/signup", (req, res) => {
+    const slot = signupsPerIp.take(req.ip ?? "?");
+    if (!slot.ok) { res.setHeader("Retry-After", String(slot.retryAfterSec)); return res.status(429).json({ error: "Too many sign-ups from this address. Try again later." }); }
     const b = req.body ?? {};
     const email = typeof b.email === "string" ? b.email.trim().toLowerCase() : "";
     if (!EMAIL.test(email) || email.length > 254) return res.status(400).json({ error: "Enter a valid email address" });
@@ -116,6 +123,8 @@ export function setupAuth(app: Express, db: Db, o: AuthOpts) {
   app.post("/api/auth/login", (req, res) => {
     const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     const pw = typeof req.body?.password === "string" ? req.body.password : "";
+    const slot = loginsPerIp.take(req.ip ?? "?");
+    if (!slot.ok) { res.setHeader("Retry-After", String(slot.retryAfterSec)); return res.status(429).json({ error: "Too many attempts. Try again in a few minutes." }); }
     const k = keyOf(req, email), f = failures.get(k);
     if (f && f.n >= 5 && f.until > Date.now()) return res.status(429).json({ error: "Too many attempts. Try again in a few minutes." });
     const row = db.prepare("SELECT id,email,name,role,must_change_password,disabled,password_hash FROM users WHERE email=?").get(email) as any;

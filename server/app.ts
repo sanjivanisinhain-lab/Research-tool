@@ -1,6 +1,8 @@
 import express from "express";
 import { audit, type Db } from "./db";
 import { setupAuth, type AuthOpts } from "./auth";
+import { rateLimit } from "./limits";
+import { mountStatic } from "./static";
 import { ingestContribution } from "./ingest";
 import { processUpload } from "./upload";
 import { enqueueExtractions, enqueueRebuild, enqueueTranscription, retryJob } from "./jobs";
@@ -16,16 +18,22 @@ import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; staticDir?: string; limits?: { aiPerHour?: number; notesPerHour?: number }; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
 
 export function createApp(db: Db, opts: AppOpts = {}) {
   const app = express();
-  app.use(express.json({ limit: "25mb" })); // attachments and design images arrive as base64
+  app.disable("x-powered-by");
+  // Bodies are small by default. Only the two routes that carry attachments or a design image accept large ones, and only after sign-in.
+  const small = express.json({ limit: "100kb" }); const big = express.json({ limit: "25mb" });
+  const carriesFiles = (req: express.Request) => req.method === "POST" && (req.path === "/api/answers" || req.path === "/api/assessments");
+  app.use((req, res, next) => (carriesFiles(req) ? next() : small(req, res, next)));
+  const aiLimit = rateLimit(3_600_000, opts.limits?.aiPerHour ?? 60);      // each AI request costs money and quota: limit per person
+  const noteLimit = rateLimit(3_600_000, opts.limits?.notesPerHour ?? 20);
 
-  app.get("/api/health", (_req, res) => res.json({ ok: true }));
+  app.get("/api/health", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.setHeader("X-Content-Type-Options", "nosniff"); try { db.prepare("SELECT 1").get(); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
   setupAuth(app, db, opts.auth ?? {}); // everything registered after this line requires a signed-in user
 
   // Recordings are streamed to disk (they can be large) and transcribed by a background job.
@@ -90,9 +98,9 @@ export function createApp(db: Db, opts: AppOpts = {}) {
 
   // The redacted text of a source (speech, notes and any AI screen observations), for checking machine output against what you know.
   app.get("/api/admin/sources/:id/utterances", (req, res) => {
-    const s = db.prepare("SELECT title, quality FROM sources WHERE id=?").get(req.params.id) as { title: string; quality: string | null } | undefined;
+    const s = db.prepare("SELECT title, quality FROM sources WHERE id=?").get(String(req.params.id)) as { title: string; quality: string | null } | undefined;
     if (!s) return res.status(404).json({ error: "not found" });
-    res.json({ title: s.title, quality: s.quality, utterances: db.prepare("SELECT seq, speaker, start_sec AS startSec, text FROM utterances WHERE source_id=? ORDER BY seq LIMIT 3000").all(req.params.id) });
+    res.json({ title: s.title, quality: s.quality, utterances: db.prepare("SELECT seq, speaker, start_sec AS startSec, text FROM utterances WHERE source_id=? ORDER BY seq LIMIT 3000").all(String(req.params.id)) });
   });
 
   app.get("/api/admin/jobs", (_req, res) => {
@@ -110,7 +118,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     audit(db, "rebuild_audiences.by", { by: req.user!.id });
     res.status(202).json({ jobId: enqueueRebuild(db) });
   });
-  app.post("/api/admin/jobs/:id/retry", (req, res) => (retryJob(db, Number(req.params.id)) ? res.json({ ok: true }) : res.status(404).json({ error: "no failed job with that id" })));
+  app.post("/api/admin/jobs/:id/retry", (req, res) => (retryJob(db, Number(String(req.params.id))) ? res.json({ ok: true }) : res.status(404).json({ error: "no failed job with that id" })));
 
   // Study requests: the research team's side
   app.get("/api/admin/study-requests", (req, res) => {
@@ -122,10 +130,10 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const b = req.body ?? {};
     if (b.status !== undefined && !["new", "accepted", "in_progress", "done", "declined"].includes(b.status)) return res.status(400).json({ error: "bad status" });
     const r = db.prepare("UPDATE study_requests SET status=COALESCE(?,status), team_note=COALESCE(?,team_note), updated_at=? WHERE id=?")
-      .run(b.status ?? null, typeof b.teamNote === "string" ? b.teamNote.slice(0, 2000) : null, new Date().toISOString(), req.params.id);
+      .run(b.status ?? null, typeof b.teamNote === "string" ? b.teamNote.slice(0, 2000) : null, new Date().toISOString(), String(req.params.id));
     if (!r.changes) return res.status(404).json({ error: "not found" });
-    audit(db, "study_request.update", { id: req.params.id, status: b.status ?? null, by: req.user!.id });
-    res.json({ id: req.params.id });
+    audit(db, "study_request.update", { id: String(req.params.id), status: b.status ?? null, by: req.user!.id });
+    res.json({ id: String(req.params.id) });
   });
 
   // Pending / approved / rejected evidence, with its source context
@@ -152,7 +160,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   });
 
   const setStatus = (status: "approved" | "rejected") => (req: express.Request, res: express.Response) => {
-    const id = Number(req.params.id);
+    const id = Number(String(req.params.id));
     const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
     const r = db.prepare("UPDATE evidence SET status=?, review_note=COALESCE(?, review_note), reviewed_by=?, reviewed_at=? WHERE id=?").run(status, note, req.user!.id, new Date().toISOString(), id);
     if (!r.changes) return res.status(404).json({ error: "not found" });
@@ -164,7 +172,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
 
   // Only translation / theme / sentiment are editable. The quote itself is never editable: it must stay a verbatim substring of the source.
   app.patch("/api/admin/evidence/:id", (req, res) => {
-    const id = Number(req.params.id);
+    const id = Number(String(req.params.id));
     const b = req.body ?? {};
     const sentiments = ["positive", "negative", "neutral", "mixed"];
     if (b.sentiment !== undefined && !sentiments.includes(b.sentiment)) return res.status(400).json({ error: "bad sentiment" });
@@ -177,15 +185,15 @@ export function createApp(db: Db, opts: AppOpts = {}) {
 
   // Bulk approve everything pending for a source (e.g. after spot-checking it)
   app.post("/api/admin/sources/:id/approve-all", (req, res) => {
-    const r = db.prepare("UPDATE evidence SET status='approved' WHERE source_id=? AND status='pending'").run(req.params.id);
-    db.prepare("UPDATE sources SET status='approved' WHERE id=?").run(req.params.id);
-    audit(db, "source.approve_all", { source: req.params.id, evidence: Number(r.changes), by: req.user!.id });
+    const r = db.prepare("UPDATE evidence SET status='approved' WHERE source_id=? AND status='pending'").run(String(req.params.id));
+    db.prepare("UPDATE sources SET status='approved' WHERE id=?").run(String(req.params.id));
+    audit(db, "source.approve_all", { source: String(req.params.id), evidence: Number(r.changes), by: req.user!.id });
     res.json({ approved: Number(r.changes) });
   });
 
 
   // Contributions from CX / anyone: redacted on arrival, held as pending until the research team approves.
-  app.post("/api/contributions", (req, res) => {
+  app.post("/api/contributions", noteLimit, (req, res) => {
     const text = req.body?.text;
     const kind = req.body?.kind === "interview" ? "interview" : "cx_call";
     if (typeof text !== "string" || text.trim().length < 10) return res.status(400).json({ error: "text required (min 10 characters)" });
@@ -202,20 +210,20 @@ export function createApp(db: Db, opts: AppOpts = {}) {
 
   // ---------- Study requests: a user asks the research team to run a planned study ----------
   const requestRow = (answerId: string) => db.prepare("SELECT id, status, team_note AS teamNote, note, created_at AS createdAt, updated_at AS updatedAt FROM study_requests WHERE answer_id=?").get(answerId);
-  app.get("/api/answers/:id/study-request", (req, res) => { const o = answerOwner(req.params.id); return !o || !canSee(req, o.u) ? res.status(404).end() : res.json(requestRow(req.params.id) ?? null); });
-  app.post("/api/answers/:id/study-request", (req, res) => {
-    const row = db.prepare("SELECT answer_json j, user_id u FROM answers WHERE id=?").get(req.params.id) as { j: string; u: string | null } | undefined;
+  app.get("/api/answers/:id/study-request", (req, res) => { const o = answerOwner(String(req.params.id)); return !o || !canSee(req, o.u) ? res.status(404).end() : res.json(requestRow(String(req.params.id)) ?? null); });
+  app.post("/api/answers/:id/study-request", noteLimit, (req, res) => {
+    const row = db.prepare("SELECT answer_json j, user_id u FROM answers WHERE id=?").get(String(req.params.id)) as { j: string; u: string | null } | undefined;
     if (!row || !canSee(req, row.u)) return res.status(404).json({ error: "plan not found" });
     const answer = JSON.parse(row.j) as { variant: string; question: string; headline: string; audience: AudienceRef[]; studyPlan?: unknown; known?: unknown; unknowns?: unknown };
     if (answer.variant !== "study_plan" || !answer.studyPlan) return res.status(400).json({ error: "only a study plan can be requested" });
-    if (requestRow(req.params.id)) return res.status(409).json({ error: "already requested", request: requestRow(req.params.id) });
+    if (requestRow(String(req.params.id))) return res.status(409).json({ error: "already requested", request: requestRow(String(req.params.id)) });
     const profile = { ...(db.prepare("SELECT role, team, area, name FROM profiles WHERE id=?").get(req.user!.id) as object | undefined), name: req.user!.name, email: req.user!.email };
     const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 2000) : "";
     const id = "req-" + crypto.randomBytes(4).toString("hex"); const now = new Date().toISOString();
     db.prepare("INSERT INTO study_requests(id,answer_id,title,plan_json,requester_json,note,created_at,updated_at,user_id) VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(id, req.params.id, answer.headline.replace(/^Recommended next test: /, ""), JSON.stringify({ question: answer.question, audience: answer.audience, studyPlan: answer.studyPlan, known: answer.known ?? [], unknowns: answer.unknowns ?? [] }), JSON.stringify(profile), note || null, now, now, req.user!.id);
-    audit(db, "study_request.create", { id, answerId: req.params.id });
-    res.status(201).json(requestRow(req.params.id));
+      .run(id, String(req.params.id), answer.headline.replace(/^Recommended next test: /, ""), JSON.stringify({ question: answer.question, audience: answer.audience, studyPlan: answer.studyPlan, known: answer.known ?? [], unknowns: answer.unknowns ?? [] }), JSON.stringify(profile), note || null, now, now, req.user!.id);
+    audit(db, "study_request.create", { id, answerId: String(req.params.id) });
+    res.status(201).json(requestRow(String(req.params.id)));
   });
 
   // ---------- Product API (matches docs/API_CONTRACT.md) ----------
@@ -261,7 +269,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   });
   app.get("/api/audiences/:kind/:id", (req, res) => {
     if (req.params.kind !== "segment" && req.params.kind !== "persona") return res.status(404).end();
-    const a = audienceProfile(req.params.kind, req.params.id);
+    const a = audienceProfile(req.params.kind, String(req.params.id));
     return a ? res.json(a) : res.status(404).end();
   });
   app.post("/api/audiences/count", (req, res) => {
@@ -270,7 +278,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     res.json({ count: members ? members.length : (db.prepare("SELECT COUNT(*) n FROM participants").get() as { n: number }).n });
   });
 
-  app.post("/api/answers", async (req, res) => {
+  app.post("/api/answers", aiLimit, big, async (req, res) => {
     const b = req.body ?? {};
     if (typeof b.question !== "string" || !b.question.trim() || b.question.length > 4000) return res.status(400).json({ error: "question required" });
     if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
@@ -285,7 +293,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     } catch (e) { console.error("answer failed:", (e as Error).message); res.status(502).json({ error: "answer generation failed" }); }
   });
   app.get("/api/answers/:id", (req, res) => {
-    const r = db.prepare("SELECT answer_json j, user_id u FROM answers WHERE id=?").get(req.params.id) as { j: string; u: string | null } | undefined;
+    const r = db.prepare("SELECT answer_json j, user_id u FROM answers WHERE id=?").get(String(req.params.id)) as { j: string; u: string | null } | undefined;
     return r && canSee(req, r.u) ? res.type("json").send(r.j) : res.status(404).end();
   });
 
@@ -321,18 +329,18 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     res.json([...answers, ...assessments, ...chats].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).slice(0, 100));
   });
 
-  app.post("/api/answers/:id/follow-ups", async (req, res) => {
+  app.post("/api/answers/:id/follow-ups", aiLimit, async (req, res) => {
     const q = req.body?.question;
     if (typeof q !== "string" || !q.trim() || q.length > 2000) return res.status(400).json({ error: "question required" });
     if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
     try {
-      const o = answerOwner(req.params.id);
+      const o = answerOwner(String(req.params.id));
       if (!o || !canSee(req, o.u)) return res.status(404).end();
-      const fu = await followUp(db, opts.ai, req.params.id, q.trim());
+      const fu = await followUp(db, opts.ai, String(req.params.id), q.trim());
       return fu ? res.json(fu) : res.status(404).end();
     } catch (e) { console.error("follow-up failed:", (e as Error).message); res.status(502).json({ error: "follow-up failed" }); }
   });
-  app.post("/api/assessments", async (req, res) => {
+  app.post("/api/assessments", aiLimit, big, async (req, res) => {
     const b = req.body ?? {};
     if (typeof b.task !== "string" || !b.task.trim() || b.task.length > 1000) return res.status(400).json({ error: "task required" });
     const audience: AudienceRef[] = Array.isArray(b.audience) ? b.audience : [];
@@ -351,28 +359,36 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     } catch (e) { console.error("assessment failed:", (e as Error).message); res.status(502).json({ error: "assessment failed" }); }
   });
   app.get("/api/assessments/:id/image", (req, res) => {
-    const r = db.prepare("SELECT image_path p, image_mime m, user_id u FROM assessments WHERE id=?").get(req.params.id) as { p: string | null; m: string | null; u: string | null } | undefined;
+    const r = db.prepare("SELECT image_path p, image_mime m, user_id u FROM assessments WHERE id=?").get(String(req.params.id)) as { p: string | null; m: string | null; u: string | null } | undefined;
     if (!r?.p || !canSee(req, r.u) || !fs.existsSync(r.p)) return res.status(404).end();
     res.type(r.m ?? "image/png").send(fs.readFileSync(r.p));
   });
   app.get("/api/assessments/:id", (req, res) => {
-    const r = db.prepare("SELECT assessment_json j, user_id u FROM assessments WHERE id=?").get(req.params.id) as { j: string; u: string | null } | undefined;
+    const r = db.prepare("SELECT assessment_json j, user_id u FROM assessments WHERE id=?").get(String(req.params.id)) as { j: string; u: string | null } | undefined;
     return r && canSee(req, r.u) ? res.type("json").send(r.j) : res.status(404).end();
   });
   // ---------- Persona chat: talk to a research-derived persona (a simulation, always grounded and labelled) ----------
   app.get("/api/personas/:id/conversation", (req, res) => {
-    const persona = latestPersona(db, req.params.id);
+    const persona = latestPersona(db, String(req.params.id));
     return persona ? res.json(conversation(db, req.user!.id, persona)) : res.status(404).end();
   });
-  app.post("/api/personas/:id/messages", async (req, res) => {
+  app.post("/api/personas/:id/messages", aiLimit, async (req, res) => {
     const text = req.body?.text;
     if (typeof text !== "string" || !text.trim() || text.length > 2000) return res.status(400).json({ error: "message required" });
-    const persona = latestPersona(db, req.params.id);
+    const persona = latestPersona(db, String(req.params.id));
     if (!persona) return res.status(404).json({ error: "persona not found" });
     if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
     try { res.json(await chatWithPersona(db, opts.ai, { userId: req.user!.id, persona, text: text.trim(), ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) })); }
     catch (e) { console.error("persona chat failed:", (e as Error).message); res.status(502).json({ error: "the persona could not reply" }); }
   });
 
+  // The built web app (when present), then a JSON 404 for unknown API paths and a generic error handler (never leaks internals).
+  if (opts.staticDir) mountStatic(app, opts.staticDir, { secure: !!opts.auth?.cookieSecure });
+  app.use("/api", (_req, res) => res.status(404).json({ error: "not found" }));
+  app.use((err: Error & { status?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
+    if (status >= 500) console.error(`unhandled error on ${req.method} ${req.path}:`, err.message); // message only: no stack, body or headers
+    res.status(status).json({ error: status >= 500 ? "server error" : status === 413 ? "request too large" : "bad request" });
+  });
   return app;
 }

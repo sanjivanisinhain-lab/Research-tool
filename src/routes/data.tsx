@@ -151,7 +151,7 @@ function UploadTab() {
           <p className="mt-3 font-display text-lg font-semibold">Drop files here, or click to choose</p>
           <p className="mt-1 text-sm text-muted-foreground">CSV and Excel call notes · transcripts as txt, docx or pdf · recordings as mp3, wav, m4a, mp4, mov</p>
           <p className="mt-1 text-xs text-muted-foreground">Recordings are transcribed in the background. Tick the screen option to also analyse what happens on screen in videos. Scanned PDFs can't be read yet.</p>
-          <input ref={input} type="file" multiple hidden accept=".csv,.xlsx,.xls,.txt,.md,.docx,.pdf,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac,.mp4,.mov,.mkv,.webm" onChange={(e) => { run([...(e.target.files ?? [])]); e.target.value = ""; }} />
+          <input ref={input} type="file" multiple hidden accept=".csv,.xlsx,.txt,.md,.docx,.pdf,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac,.mp4,.mov,.mkv,.webm" onChange={(e) => { run([...(e.target.files ?? [])]); e.target.value = ""; }} />
         </div>
         <ul className="mt-4 space-y-2">{rows.map((r, i) => <ResultRow key={i} row={r} />)}</ul>
       </div>

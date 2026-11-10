@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 `;
 
-export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db {
+export function openDb(file = process.env["DB_PATH"] ?? `${process.env["DATA_DIR"] ?? "data"}/research.sqlite`): Db {
   if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);

@@ -1,0 +1,40 @@
+# Research Hub. Copy .env.example to .env and fill it in, then:
+#   docker compose up -d                       # app only, on http://127.0.0.1:8787
+#   docker compose --profile https up -d       # app + automatic https for the domain in .env (DOMAIN=...)
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+    volumes:
+      - rh-data:/data              # database, name list, design images, backups
+    ports:
+      - "127.0.0.1:8787:8787"      # this machine only. Change deliberately if other machines must reach it directly.
+    read_only: true                # the container can only write to /data and /tmp
+    tmpfs:
+      - /tmp                       # scratch space for recording processing
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:                           # optional: https with an automatic certificate
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [app]
+
+volumes:
+  rh-data:
+  caddy-data:
+  caddy-config:

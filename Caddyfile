@@ -1,0 +1,7 @@
+{$DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 1600MB   # recordings can be large; the app enforces its own 1.5 GB limit
+	}
+	reverse_proxy app:8787
+}

@@ -1,0 +1,13 @@
+{
+  "name": "research-hub-server",
+  "private": true,
+  "type": "module",
+  "description": "Runtime dependencies of the server only (what the production image installs).",
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "mammoth": "^1.13.0",
+    "papaparse": "^5.7.0",
+    "pdf-parse": "^2.4.5"
+  }
+}

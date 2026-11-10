@@ -1,6 +1,6 @@
 import path from "node:path";
 import Papa from "papaparse";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { PDFParse } from "pdf-parse";
 import type { Db } from "./db";
 import { audit } from "./db";
@@ -14,6 +14,20 @@ export type UploadResult = {
 };
 
 const AUDIO_VIDEO = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".mp4", ".mov", ".mkv", ".webm", ".avi"]);
+/** Text of a spreadsheet cell, whatever its kind (plain, rich text, formula result, hyperlink, date). */
+function cellText(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "object") {
+    const o = v as { text?: unknown; result?: unknown; richText?: { text: string }[] };
+    if (o.richText) return o.richText.map((t) => t.text).join("");
+    if (o.text !== undefined) return cellText(o.text);
+    if (o.result !== undefined) return cellText(o.result);
+    return "";
+  }
+  return String(v);
+}
+
 const empty = (): Omit<UploadResult, "status" | "message"> => ({ sourcesAdded: 0, sourcesSkipped: 0, participantsAdded: 0, redaction: zeroCounts() });
 const fail = (status: UploadResult["status"], message: string): UploadResult => ({ status, message, ...empty() });
 
@@ -52,12 +66,17 @@ export async function processUpload(db: Db, file: { name: string; buf: Buffer },
     else if (ext === ".csv") {
       const r = ingestCsvText(db, file.buf.toString("utf8"), meta);
       result = r ? fromIngest(r, "CX call notes (CSV)") : fail("failed", "No 'Notes' column found. A call-notes sheet needs a Notes column (plus any of: Name, City, Mobile Number, Product Name, Date, Type of user, Payment type, Call duration).");
-    } else if (ext === ".xlsx" || ext === ".xls") {
-      const wb = XLSX.read(file.buf, { type: "buffer" });
+    } else if (ext === ".xls") {
+      result = fail("unsupported", "Old .xls files aren't supported. Open it and Save As .xlsx (or CSV), then upload that.");
+    } else if (ext === ".xlsx") {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(file.buf as unknown as ArrayBuffer);
       let total: UploadResult = { ...fail("failed", ""), format: "CX call notes (Excel)" }; let used = 0; const skipped: string[] = [];
-      for (const name of wb.SheetNames) {
-        const r = ingestCsvText(db, XLSX.utils.sheet_to_csv(wb.Sheets[name]), meta);
-        if (!r) { skipped.push(name); continue; }
+      for (const sheet of wb.worksheets) {
+        const rows: string[][] = [];
+        sheet.eachRow({ includeEmpty: false }, (row) => { rows.push(((row.values as unknown[]).slice(1)).map(cellText)); });
+        const r = ingestCsvText(db, Papa.unparse(rows), meta);
+        if (!r) { skipped.push(sheet.name); continue; }
         used++; total = { ...total, sourcesAdded: total.sourcesAdded + r.sourcesAdded, sourcesSkipped: total.sourcesSkipped + r.sourcesSkipped, participantsAdded: total.participantsAdded + r.participantsAdded, redaction: addCounts(total.redaction, r.redaction) };
       }
       total.status = used === 0 ? "failed" : skipped.length ? "partial" : "processed";

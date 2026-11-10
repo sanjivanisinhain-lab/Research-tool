@@ -1,3 +1,5 @@
+> **Running and deploying this app:** see [docs/DEPLOY.md](docs/DEPLOY.md) (setup, backups, operations), [docs/SECURITY.md](docs/SECURITY.md) (what is protected and what is still your decision) and [docs/AUTH.md](docs/AUTH.md) (accounts). `.env.example` lists every setting. Run `npm run typecheck` and `npm test` before changing code.
+
 # Research Hub
 
 i am giving Product context, don't generate anything right now: 

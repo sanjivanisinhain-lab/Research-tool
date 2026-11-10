@@ -1,0 +1,15 @@
+**/node_modules
+server/test
+dist
+data
+.git
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.log
+.tanstack
+.nitro
+.vinxi
+docs
