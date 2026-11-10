@@ -2,7 +2,7 @@ import express from "express";
 import { audit, type Db } from "./db";
 import { ingestContribution } from "./ingest";
 import type { AiProvider } from "./ai/provider";
-import { answerQuestion, audienceParticipants } from "./ai/ask";
+import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
@@ -139,9 +139,12 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const b = req.body ?? {};
     if (typeof b.question !== "string" || !b.question.trim() || b.question.length > 4000) return res.status(400).json({ error: "question required" });
     if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
-    if (b.mode === "compare") return res.status(501).json({ error: "compare mode not implemented yet" });
+    const audience = Array.isArray(b.audience) ? b.audience : [];
+    if (b.mode === "compare" && audience.length < 2) return res.status(400).json({ error: "compare needs at least two audiences" });
     try {
-      const a = await answerQuestion(db, opts.ai, { question: b.question.trim(), audience: Array.isArray(b.audience) ? b.audience : [], includeUnreviewed: opts.includeUnreviewed });
+      const a = b.mode === "compare"
+        ? await compareAudiences(db, opts.ai, { question: b.question.trim(), audience, includeUnreviewed: opts.includeUnreviewed })
+        : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, includeUnreviewed: opts.includeUnreviewed });
       res.json({ id: a.id });
     } catch (e) { console.error("answer failed:", (e as Error).message); res.status(502).json({ error: "answer generation failed" }); }
   });
@@ -173,7 +176,16 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       status: r.variant === "insufficient" ? "Insufficient evidence" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } })));
   });
 
-  for (const p of ["/api/answers/:id/follow-ups", "/api/assessments", "/api/personas/:id/messages"]) app.post(p, (_req, res) => res.status(501).json({ error: "not implemented yet" }));
+  app.post("/api/answers/:id/follow-ups", async (req, res) => {
+    const q = req.body?.question;
+    if (typeof q !== "string" || !q.trim() || q.length > 2000) return res.status(400).json({ error: "question required" });
+    if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
+    try {
+      const fu = await followUp(db, opts.ai, req.params.id, q.trim());
+      return fu ? res.json(fu) : res.status(404).end();
+    } catch (e) { console.error("follow-up failed:", (e as Error).message); res.status(502).json({ error: "follow-up failed" }); }
+  });
+  for (const p of ["/api/assessments", "/api/personas/:id/messages"]) app.post(p, (_req, res) => res.status(501).json({ error: "not implemented yet" }));
   app.get("/api/assessments/:id", (_req, res) => res.status(404).end());
   app.get("/api/personas/:id/conversation", (_req, res) => res.json([]));
 
