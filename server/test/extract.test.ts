@@ -29,8 +29,17 @@ describe("extraction integrity", () => {
     expect(res).toMatchObject({ proposed: 3, kept: 2, droppedUnverified: 1, cached: false });
     const rows = db.prepare("SELECT original_text, provenance, status, theme FROM evidence ORDER BY id").all() as any[];
     expect(rows.map((r) => r.provenance)).toEqual(["participant_verbatim", "researcher_note"]);
-    expect(rows.every((r) => r.status === "pending")).toBe(true);
+    expect(rows.every((r) => r.status === "approved")).toBe(true); // research-team upload is trusted
     expect(rows[0].theme).toBe("price first");
+  });
+  it("keeps contributor input pending until a person approves it", async () => {
+    const { db } = setup();
+    ingestCallsCsv(db, CSV.replace("17-09-2026", "18-09-2026").replace("Blue Kurti", "Green Kurti"), { studyName: "Contrib", product: "Shop", submittedBy: "contributor" });
+    const src = db.prepare("SELECT id, status FROM sources WHERE submitted_by='contributor'").get() as { id: string; status: string };
+    expect(src.status).toBe("pending");
+    const u = db.prepare("SELECT id FROM utterances WHERE source_id=? LIMIT 1").get(src.id) as { id: number };
+    await extractSource(db, new MockProvider(() => ({ findings: [{ utterance_id: u.id, quote: "Prefers COD", kind: "said", theme: "cod", sentiment: "neutral" }] })), src.id);
+    expect(db.prepare("SELECT status FROM evidence WHERE source_id=?").all(src.id)).toEqual([{ status: "pending" }]);
   });
   it("does not call the AI twice for the same source/model/prompt", async () => {
     const { db, sourceId } = setup();

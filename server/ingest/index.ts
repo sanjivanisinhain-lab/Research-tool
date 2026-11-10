@@ -6,6 +6,7 @@ import mammoth from "mammoth";
 import { audit, type Db } from "../db";
 import { addCounts, makeRedactor, zeroCounts, type RedactionCounts } from "../redact";
 
+export type SubmittedBy = "research_team" | "contributor";
 export type IngestResult = { studyId: string; sourcesAdded: number; sourcesSkipped: number; participantsAdded: number; redaction: RedactionCounts };
 /** Local-only list of removed names/places so later files are redacted consistently. Never stored in the DB, never sent to an AI. */
 export type TermsStore = { names: string[]; places: string[] };
@@ -59,13 +60,13 @@ function parseDmy(s: string): string | null {
 
 function addSource(db: Db, row: {
   studyId: string; participantId: string; type: string; origin: string; title: string; date: string | null;
-  lang: Language; key: string; counts: RedactionCounts; quality?: string;
+  lang: Language; key: string; counts: RedactionCounts; quality?: string; submittedBy: SubmittedBy;
 }): string | null {
   const id = "SRC-" + row.key.slice(0, 10);
   const res = db.prepare(
-    `INSERT OR IGNORE INTO sources(id,study_id,participant_id,source_type,origin,title,date,original_language,status,external_key,redaction_json,quality,created_at)
-     VALUES (?,?,?,?,?,?,?,?, 'pending', ?,?,?,?)`,
-  ).run(id, row.studyId, row.participantId, row.type, row.origin, row.title, row.date, row.lang, row.key, JSON.stringify(row.counts), row.quality ?? null, now());
+    `INSERT OR IGNORE INTO sources(id,study_id,participant_id,source_type,origin,title,date,original_language,status,external_key,redaction_json,quality,created_at,submitted_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  ).run(id, row.studyId, row.participantId, row.type, row.origin, row.title, row.date, row.lang, row.submittedBy === "research_team" ? "approved" : "pending", row.key, JSON.stringify(row.counts), row.quality ?? null, now(), row.submittedBy);
   return res.changes ? id : null;
 }
 
@@ -75,7 +76,7 @@ function addUtterances(db: Db, sourceId: string, participantId: string | null, t
 }
 
 /** CX call-notes spreadsheet export (CSV). Names, numbers and cities are removed before storage. */
-export function ingestCallsCsv(db: Db, csv: string, opts: { studyName: string; product: string; termsPath?: string }): IngestResult {
+export function ingestCallsCsv(db: Db, csv: string, opts: { studyName: string; product: string; termsPath?: string; submittedBy?: SubmittedBy }): IngestResult {
   const parsed = Papa.parse<Record<string, string>>(csv, { header: true, skipEmptyLines: true });
   const rows = parsed.data.filter((r) => (r["Notes"] ?? "").trim());
   const known = loadTerms(opts.termsPath);
@@ -100,7 +101,7 @@ export function ingestCallsCsv(db: Db, csv: string, opts: { studyName: string; p
         if (v && v.trim()) meta[k] = v.trim();
       }
       const pid = addParticipant(db, studyId, meta);
-      const sid = addSource(db, { studyId, participantId: pid, type: "cx_call", origin: "researcher_notes", title: `CX call notes · ${product.slice(0, 60)}`, date, lang: detectLanguage(red.text), key, counts: red.counts });
+      const sid = addSource(db, { studyId, participantId: pid, type: "cx_call", origin: "researcher_notes", title: `CX call notes · ${product.slice(0, 60)}`, date, lang: detectLanguage(red.text), key, counts: red.counts, submittedBy: opts.submittedBy ?? "research_team" });
       if (!sid) { result.sourcesSkipped++; continue; }
       const paras = red.text.split(/\n+/).map((s) => s.trim()).filter(Boolean);
       addUtterances(db, sid, pid, paras.map((text) => ({ speaker: "note", text })));
@@ -146,7 +147,7 @@ export function parseLabelledTurns(raw: string): { speaker: string; text: string
   return turns.filter((t) => t.text);
 }
 
-export type TranscriptOpts = { studyName: string; product: string; date?: string; knownNames?: string[]; termsPath?: string; noisy?: boolean; format: "speaker_blocks" | "labelled" };
+export type TranscriptOpts = { studyName: string; product: string; date?: string; knownNames?: string[]; termsPath?: string; submittedBy?: SubmittedBy; noisy?: boolean; format: "speaker_blocks" | "labelled" };
 
 export function ingestTranscript(db: Db, raw: string, opts: TranscriptOpts): IngestResult {
   const studyId = ensureStudy(db, opts.studyName, opts.product);
@@ -166,7 +167,7 @@ export function ingestTranscript(db: Db, raw: string, opts: TranscriptOpts): Ing
       const key = sha(`transcript|${opts.studyName}|${red.map((t) => t.text).join("\n")}`);
       if (db.prepare("SELECT 1 FROM sources WHERE external_key=?").get(key)) { result.sourcesSkipped++; return; }
       const pid = addParticipant(db, studyId, {});
-      const sid = addSource(db, { studyId, participantId: pid, type: "interview", origin: "verbatim_transcript", title: `${opts.studyName} · interview ${idx + 1}`, date: opts.date ?? null, lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: opts.noisy ? "noisy_asr" : undefined });
+      const sid = addSource(db, { studyId, participantId: pid, type: "interview", origin: "verbatim_transcript", title: `${opts.studyName} · interview ${idx + 1}`, date: opts.date ?? null, lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: opts.noisy ? "noisy_asr" : undefined, submittedBy: opts.submittedBy ?? "research_team" });
       if (!sid) { result.sourcesSkipped++; return; }
       addUtterances(db, sid, pid, red);
       result.sourcesAdded++; result.participantsAdded++;
@@ -180,4 +181,24 @@ export function ingestTranscript(db: Db, raw: string, opts: TranscriptOpts): Ing
 
 export async function docxToText(buf: Buffer): Promise<string> {
   return (await mammoth.extractRawText({ buffer: buf })).value;
+}
+
+/** Free-text input from CX or any team member. Always lands as a pending contributor source; never counts as evidence until approved. */
+export function ingestContribution(db: Db, text: string, opts: { kind: "cx_call" | "interview"; note?: string; termsPath?: string }): { sourceId: string; participantId: string } | null {
+  const known = loadTerms(opts.termsPath);
+  const red = makeRedactor(known)(text.trim().slice(0, 20000));
+  if (!red.text) return null;
+  const studyId = ensureStudy(db, "Team contributions", "");
+  const key = sha(`contrib|${red.text}`);
+  if (db.prepare("SELECT 1 FROM sources WHERE external_key=?").get(key)) return null; // duplicate
+  db.exec("BEGIN");
+  try {
+    const pid = addParticipant(db, studyId, {});
+    const sid = addSource(db, { studyId, participantId: pid, type: opts.kind, origin: "researcher_notes", title: `Contribution · ${new Date().toISOString().slice(0, 10)}`, date: new Date().toISOString().slice(0, 10), lang: detectLanguage(red.text), key, counts: red.counts, submittedBy: "contributor" });
+    if (!sid) { db.exec("ROLLBACK"); return null; }
+    addUtterances(db, sid, pid, red.text.split(/\n+/).map((t) => t.trim()).filter(Boolean).map((t) => ({ speaker: "note", text: t })));
+    audit(db, "contribution.received", { sourceId: sid, redaction: red.counts });
+    db.exec("COMMIT");
+    return { sourceId: sid, participantId: pid };
+  } catch (e) { db.exec("ROLLBACK"); throw e; }
 }

@@ -161,6 +161,8 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 /** Adds the canonical_theme column on databases created before it existed, then (re)builds the search index. */
 export function migrateV4(db: Db) {
+  const srcCols = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];
+  if (!srcCols.some((c) => c.name === "submitted_by")) db.exec("ALTER TABLE sources ADD COLUMN submitted_by TEXT NOT NULL DEFAULT 'research_team' CHECK (submitted_by IN ('research_team','contributor'))");
   const cols = db.prepare("PRAGMA table_info(evidence)").all() as { name: string }[];
   if (!cols.some((c) => c.name === "canonical_theme")) db.exec("ALTER TABLE evidence ADD COLUMN canonical_theme TEXT");
   db.exec(SCHEMA_V4);

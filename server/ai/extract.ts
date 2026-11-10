@@ -63,13 +63,15 @@ export async function extractSource(db: Db, ai: AiProvider, sourceId: string): P
   const cached = db.prepare("SELECT proposed,kept,dropped_unverified d FROM extraction_runs WHERE source_id=? AND model=? AND prompt_version=?").get(sourceId, ai.model, PROMPT_VERSION) as { proposed: number; kept: number; d: number } | undefined;
   if (cached) return { sourceId, proposed: cached.proposed, kept: cached.kept, droppedUnverified: cached.d, cached: true };
 
-  const src = db.prepare("SELECT id,participant_id,origin,quality FROM sources WHERE id=?").get(sourceId) as { id: string; participant_id: string; origin: string; quality: string | null } | undefined;
+  const src = db.prepare("SELECT id,participant_id,origin,quality,submitted_by FROM sources WHERE id=?").get(sourceId) as { id: string; participant_id: string; origin: string; quality: string | null; submitted_by: string } | undefined;
   if (!src) throw new Error(`Unknown source ${sourceId}`);
   const utts = db.prepare("SELECT id,speaker,text FROM utterances WHERE source_id=? ORDER BY seq").all(sourceId) as Utt[];
   const byId = new Map(utts.map((u) => [u.id, u]));
   let proposed = 0, dropped = 0;
   const ins = db.prepare(`INSERT OR IGNORE INTO evidence(source_id,participant_id,utterance_id,original_text,translation,kind,provenance,theme,sentiment,pain_point,need,job_to_be_done,emotion,flags,status,created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)`);
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  // Research-team uploads are trusted (approved on extraction); contributor input waits in the review queue.
+  const evStatus = src.submitted_by === "research_team" ? "approved" : "pending";
   let kept = 0;
   for (const chunk of chunkUtterances(utts)) {
     const prompt = chunk.map((u) => `[${u.id}] ${u.speaker}: ${u.text}`).join("\n");
@@ -83,7 +85,7 @@ export async function extractSource(db: Db, ai: AiProvider, sourceId: string): P
       if (!q || !utt) { dropped++; continue; }
       const provenance = src.origin === "researcher_notes" && !isQuotedVerbatim(utt.text, q) ? "researcher_note" : "participant_verbatim";
       const flags = [f.speaker_uncertain ? "speaker_uncertain" : "", src.quality ?? ""].filter(Boolean).join(",");
-      const r = ins.run(sourceId, src.participant_id, utt.id, q, f.translation ?? null, f.kind, provenance, f.theme.toLowerCase(), f.sentiment, f.pain_point ?? null, f.need ?? null, f.job_to_be_done ?? null, f.emotion ?? null, flags, new Date().toISOString());
+      const r = ins.run(sourceId, src.participant_id, utt.id, q, f.translation ?? null, f.kind, provenance, f.theme.toLowerCase(), f.sentiment, f.pain_point ?? null, f.need ?? null, f.job_to_be_done ?? null, f.emotion ?? null, flags, evStatus, new Date().toISOString());
       kept += Number(r.changes);
     }
   }

@@ -13,6 +13,6 @@
 - Keep deterministic persona response selection in `src/api/personaReplies.ts`; it uses supplied research patterns, never AI or web calls.
 - Use the shared API-backed PersonaChips control across audience-selection views so persona labels do not diverge.
 - Source context is returned with evidence through the typed API, not fabricated in presentation components.
-- Confidence scores and factors remain illustrative fixture inputs until a validated method exists; never claim a weighting calculation.
+- Mock/fixture confidence scores stay illustrative (`methodStatus: "illustrative"`); never present them as computed. The real backend computes confidence deterministically in `server/confidence.ts` (v1, approved by the product owner; `methodStatus: "computed_v1"`); the AI only labels evidence, never produces the numbers.
 - CX playback uses API-supplied synthetic audio assets and timed transcript cues through a shared player; no original call recording or transcription backend is implied.
 - Question dictation uses a browser-only speech recognition hook with explicit permission and service disclosure; pasted transcript attachments stay user material, outside repository evidence.

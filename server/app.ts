@@ -1,11 +1,12 @@
 import express from "express";
 import { audit, type Db } from "./db";
+import { ingestContribution } from "./ingest";
 import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants } from "./ai/ask";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
@@ -71,6 +72,16 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     res.json({ approved: Number(r.changes) });
   });
 
+
+  // Contributions from CX / anyone: redacted on arrival, held as pending until the research team approves.
+  app.post("/api/contributions", (req, res) => {
+    const text = req.body?.text;
+    const kind = req.body?.kind === "interview" ? "interview" : "cx_call";
+    if (typeof text !== "string" || text.trim().length < 10) return res.status(400).json({ error: "text required (min 10 characters)" });
+    const r = ingestContribution(db, text, { kind, termsPath: opts.termsPath });
+    if (!r) return res.status(409).json({ error: "duplicate or empty contribution" });
+    res.status(202).json({ received: true, status: "pending_review" });
+  });
 
   // ---------- Product API (matches docs/API_CONTRACT.md) ----------
   const latestRun = () => (db.prepare("SELECT id, created_at c FROM synthesis_runs ORDER BY id DESC LIMIT 1").get() as { id: number; c: string } | undefined);

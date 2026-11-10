@@ -23,6 +23,14 @@ describe("admin review API", () => {
     expect((await j("/api/admin/evidence?status=approved")).body.items[0].quote).toBe("x");
     expect(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action='evidence.approved'").get()).toEqual({ n: 1 });
   });
+  it("accepts contributions as redacted, pending, contributor-tier sources", async () => {
+    const r = await j("/api/contributions", { method: "POST", body: JSON.stringify({ text: "Customer called from 9876543210 and said delivery was late" }) });
+    expect(r.status).toBe(202);
+    expect(db.prepare("SELECT status, submitted_by FROM sources WHERE title LIKE 'Contribution%'").get()).toEqual({ status: "pending", submitted_by: "contributor" });
+    expect(JSON.stringify(db.prepare("SELECT text FROM utterances").all())).not.toContain("9876543210");
+    expect((await j("/api/contributions", { method: "POST", body: JSON.stringify({ text: "Customer called from 9876543210 and said delivery was late" }) })).status).toBe(409);
+    expect((await j("/api/contributions", { method: "POST", body: JSON.stringify({ text: "x" }) })).status).toBe(400);
+  });
   it("never lets the quote be edited and validates input", async () => {
     await j("/api/admin/evidence/1", { method: "PATCH", body: JSON.stringify({ quote: "forged", theme: "Delivery" }) });
     expect(db.prepare("SELECT original_text, theme FROM evidence WHERE id=1").get()).toEqual({ original_text: "x", theme: "delivery" });

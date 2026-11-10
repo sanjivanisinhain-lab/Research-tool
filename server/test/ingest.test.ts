@@ -42,13 +42,16 @@ describe("calls csv ingest", () => {
     expect(p.map((x) => x.id)).toEqual(["P001", "P002"]);
     expect(JSON.parse(p[0].meta_json)).toMatchObject({ user_type: "Repeat", payment_type: "COD" });
   });
-  it("is idempotent: re-importing adds nothing and new data stays pending", () => {
+  it("is idempotent: re-importing adds nothing; research-team uploads are trusted, contributor uploads are pending", () => {
     const db = openDb(":memory:");
     ingestCallsCsv(db, CSV, { studyName: "Calls", product: "TestShop" });
     const again = ingestCallsCsv(db, CSV, { studyName: "Calls", product: "TestShop" });
     expect(again.sourcesAdded).toBe(0);
     expect(again.sourcesSkipped).toBe(2);
-    expect(db.prepare("SELECT COUNT(*) n FROM sources WHERE status!='pending'").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) n FROM sources WHERE status='approved' AND submitted_by='research_team'").get()).toEqual({ n: 2 });
+    const c = openDb(":memory:");
+    ingestCallsCsv(c, CSV, { studyName: "Calls", product: "TestShop", submittedBy: "contributor" });
+    expect(c.prepare("SELECT COUNT(*) n FROM sources WHERE status='pending' AND submitted_by='contributor'").get()).toEqual({ n: 2 });
   });
   it("keeps researcher notes distinct from verbatim transcripts", () => {
     const db = openDb(":memory:");
