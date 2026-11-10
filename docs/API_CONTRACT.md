@@ -22,7 +22,7 @@ All endpoints below are **PROPOSED**. Types live in src/types/research.ts and sr
 
 ## Runtime and boundaries
 
-The frontend is a local, fixture-backed prototype, not a reasoning backend. `src/api/index.ts` selects the typed mock client by default; `VITE_USE_MOCK=false` selects the HTTP stub, with optional `VITE_API_BASE_URL`. All research reads and mutations go through this client. No AI model, web search, database, hosted authentication or external integration is connected. The existing health/records endpoints above were supplied in the brief, not verified against a running backend. Every research endpoint in the table is **PROPOSED**, not implemented here.
+The frontend is a local, fixture-backed prototype, not a reasoning backend. `src/api/index.ts` selects the real HTTP client by default; `VITE_USE_MOCK=true` selects the typed demo client (fixtures), with optional `VITE_API_BASE_URL`. All research reads and mutations go through this client. No AI model, web search, database, hosted authentication or external integration is connected. The existing health/records endpoints above were supplied in the brief, not verified against a running backend. Every research endpoint in the table is **PROPOSED**, not implemented here.
 
 Requests use JSON. `AskInput` contains `{ question: string, audience: AudienceRef[], mode: "combine" | "compare", attachments: Attachment[] }`. `AssessmentInput` contains `{ prototype: { kind: "local_sample" } | { kind: "figma_link", url: string }, task: string, goal?: string, audience: AudienceRef[] }`. Evidence IDs are comma-separated in the `ids` query parameter. Nullable client reads use HTTP 404 as not-found; other errors reject. Figma links are supplied material only, not a working Figma integration.
 

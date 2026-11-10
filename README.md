@@ -216,7 +216,7 @@ Use the numbers from the screenshots for the main fixtures: Tier 2 cart-abandonm
 API layer
 src/api/types.ts defines a ResearchApi interface (profile, audiences, ask, followUp, evidence, savedWork, assessments, personaChat).
 src/api/mock.ts implements it from fixtures with a small artificial delay.
-src/api/http.ts is a stub calling /api/..., selected when VITE_USE_MOCK=false.
+src/api/http.ts calls the real backend at /api/... and is the default. The fixture-backed demo client is used only when VITE_USE_MOCK=true.
 docs/API_CONTRACT.md lists every endpoint the UI calls, with request and response types, each marked PROPOSED except the four existing /api/* ones.
 States and quality bar
 Every list and page has loading skeleton, empty and error-with-retry states.
