@@ -49,11 +49,12 @@ function AskPage() {
     if (profile.data) saveProfile.mutate({ ...profile.data, role: r });
   };
   const [audience, setAudience] = useState<AudienceRef[]>([]);
+  const [auto, setAuto] = useState(true); // until the person picks an audience, we choose it from the question
   const initialized = useRef(false);
   useEffect(() => {
     if (initialized.current || !audiences.data) return;
-    const defaultAudience = audiences.data.find((a) => a.ref.id === pre) ?? audiences.data[0];
-    if (defaultAudience) setAudience([defaultAudience.ref]);
+    const chosen = audiences.data.find((a) => a.ref.id === pre);
+    if (chosen) { setAudience([chosen.ref]); setAuto(false); }
     initialized.current = true;
   }, [audiences.data, pre]);
   const [mode, setMode] = useState<AudienceMode>("combine");
@@ -71,7 +72,7 @@ function AskPage() {
     mutationFn: async () => {
       const attachments: Attachment[] = await Promise.all(files.map((f) => readAttachment(f)));
       if (transcript.trim()) attachments.push({ name: "Pasted CX transcript", kind: "transcript", text: transcript.trim() });
-      return api.ask({ question: q.trim(), audience, mode, attachments });
+      return api.ask({ question: q.trim(), audience, mode, attachments, ...(auto && audience.length === 0 ? { autoAudience: true } : {}) });
     },
   });
 
@@ -105,8 +106,9 @@ function AskPage() {
     <div>
       <PageHeader eyebrow="Evidence-only assistant" title="What do you want to understand?" sub="Ask about behaviour, assess an idea, or improve your research. Answers stay inside the evidence your team already has." />
       <div className="mb-3 flex items-center justify-between"><Eyebrow>Audience</Eyebrow><span className="text-xs tabular-nums text-muted-foreground">{count.data ?? "–"} represented participants{mode === "compare" && audience.length > 1 ? " · comparing" : ""}</span></div>
-      <AudienceChips audience={audience} onRemove={(id) => setAudience((a) => a.filter((x) => x.id !== id))} onAdd={() => setPicker(true)} />
-      <div className="mt-3"><PersonaChips selected={audience.map((a) => a.id)} onSelect={(p) => setAudience((a) => a.some((x) => x.id === p.id) ? a.filter((x) => x.id !== p.id) : [...a, p])} /></div>
+      {auto && audience.length === 0 && <p className="mb-2 flex items-center gap-2 text-sm"><span className="rounded-full bg-brand-soft px-3 py-1 text-xs font-semibold text-brand">Auto</span><span className="text-muted-foreground">We'll choose the audience from your question — you'll see which one, and can change it.</span></p>}
+      <AudienceChips audience={audience} onRemove={(id) => setAudience((a) => { const n = a.filter((x) => x.id !== id); if (!n.length) setAuto(true); return n; })} onAdd={() => setPicker(true)} />
+      <div className="mt-3"><PersonaChips selected={audience.map((a) => a.id)} onSelect={(p) => { setAuto(false); setAudience((a) => a.some((x) => x.id === p.id) ? a.filter((x) => x.id !== p.id) : [...a, p]); }} /></div>
       <div className="ask-composer mt-5 rounded-2xl border bg-card p-3 focus-within:border-brand/40">
         <label htmlFor="ask" className="sr-only">Your question</label>
         <textarea id="ask" rows={4} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask what the research suggests, review a script, or share an idea…" className="w-full resize-none bg-transparent p-3 text-lg outline-none placeholder:text-muted-foreground" />
@@ -122,7 +124,7 @@ function AskPage() {
           <select aria-label="Dictation language" disabled={dictation.listening} value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)} className="max-w-32 rounded-full border bg-background px-2 py-1.5 text-xs text-muted-foreground"><option value="en-IN">English (India)</option><option value="hi-IN">Hindi / Hinglish</option></select>
           </div>
           <input ref={fileRef} type="file" multiple hidden onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
-          <Button className="rounded-full px-5" disabled={!q.trim() || audience.length === 0} onClick={submit}><Send className="size-4" />Ask research</Button>
+          <Button className="rounded-full px-5" disabled={!q.trim() || (!auto && audience.length === 0)} onClick={submit}><Send className="size-4" />Ask research</Button>
         </div>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">Voice input requires microphone permission and may use your browser’s speech service.</p>
@@ -147,7 +149,7 @@ function AskPage() {
         ))}
         </div>
       </div>
-      <AudiencePickerDialog open={picker} onOpenChange={setPicker} value={audience} mode={mode} onApply={(v, m) => { setAudience(v); setMode(m); }} />
+      <AudiencePickerDialog open={picker} onOpenChange={setPicker} value={audience} mode={mode} onApply={(v, m) => { setAudience(v); setAuto(v.length === 0); setMode(m); }} />
     </div>
   );
 }

@@ -287,7 +287,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     try {
       const a = b.mode === "compare"
         ? await compareAudiences(db, opts.ai, { question: b.question.trim(), audience, includeUnreviewed: opts.includeUnreviewed })
-        : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, attachments: Array.isArray(b.attachments) ? b.attachments : [], ...(typeof b.contextAnswerId === "string" ? { contextAnswerId: b.contextAnswerId } : {}), includeUnreviewed: opts.includeUnreviewed });
+        : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, attachments: Array.isArray(b.attachments) ? b.attachments : [], ...(typeof b.contextAnswerId === "string" ? { contextAnswerId: b.contextAnswerId } : {}), includeUnreviewed: opts.includeUnreviewed, ...(b.autoAudience === true && !audience.length ? { autoAudience: true } : {}) });
       db.prepare("UPDATE answers SET user_id=? WHERE id=?").run(req.user!.id, a.id);
       res.json({ id: a.id });
     } catch (e) { console.error("answer failed:", (e as Error).message); res.status(502).json({ error: "answer generation failed" }); }

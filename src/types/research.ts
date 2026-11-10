@@ -104,6 +104,7 @@ export type Answer = {
   id: string;
   question: string;
   audience: AudienceRef[];
+  autoAudience?: boolean; // the audience was chosen from the question, not by the user
   variant: AnswerVariant;
   headline: string;
   summary: string;

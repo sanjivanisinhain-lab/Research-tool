@@ -88,3 +88,24 @@ describe("evidence numbers never appear in prose", () => {
     expect(stripEvidenceMarkers("Most wait 6 days and pay Rs 899 (about 40% do).")).toBe("Most wait 6 days and pay Rs 899 (about 40% do).");
   });
 });
+
+describe("auto audience", () => {
+  const ai = (aud: string[]) => new MockProvider((req) => {
+    if (req.system.includes("search over")) return { keywords: ["pinterest"], broad: false, audiences: aud };
+    const ids = [...req.prompt.matchAll(/#(\d+) \((P\d+),/g)].map((m) => Number(m[1]));
+    return { headline: "They browse for ideas", summary: "s", signals: ids.map((i) => ({ evidence_id: i, signal: "positive" })), patterns: [{ title: "Inspiration", summary: "x", signal: "strong", label: "evidence", evidence_ids: ids.slice(0, 2) }], unknowns: [], implications: imps };
+  });
+  it("picks the audience the question is about and records that it was automatic", async () => {
+    const db = seed();
+    const a = await answerQuestion(db, ai(["Browsers"]), { question: "Where do they find outfit ideas on pinterest?", audience: [], autoAudience: true, now: new Date("2026-11-10") });
+    expect(a.audience.map((x) => x.name)).toEqual(["Browsers"]); expect(a.autoAudience).toBe(true);
+  });
+  it("ignores invented names, and never auto-picks when the user chose an audience", async () => {
+    const db = seed();
+    const a = await answerQuestion(db, ai(["Made-up group"]), { question: "pinterest ideas?", audience: [], autoAudience: true, now: new Date("2026-11-10") });
+    expect(a.audience).toEqual([]); expect(a.autoAudience).toBe(true);
+    const own = [{ kind: "persona" as const, id: "PER-1", name: "Browsers", participants: 6 }];
+    const b = await answerQuestion(db, ai(["Browsers"]), { question: "pinterest ideas?", audience: own, autoAudience: true, now: new Date("2026-11-10") });
+    expect(b.autoAudience).toBeUndefined();
+  });
+});

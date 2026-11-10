@@ -49,7 +49,7 @@ type Raw = {
 
 
 
-export type AskOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date; attachments?: Attachment[]; contextAnswerId?: string };
+export type AskOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date; attachments?: Attachment[]; contextAnswerId?: string; autoAudience?: boolean };
 
 type Assessed = {
   raw: Raw; conf: ReturnType<typeof computeConfidence>; confidence: Answer["confidence"];
@@ -119,9 +119,12 @@ export async function answerQuestion(db: Db, ai: AiProvider, opts: AskOpts): Pro
     return planStudy(db, ai, { question: opts.question, audience, scope, context, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) });
   }
   const id = "ans-" + crypto.randomBytes(5).toString("hex");
-  const base = { id, question: opts.question, audience: opts.audience, savedAt: new Date().toISOString(), evidenceStatus: opts.includeUnreviewed ? "includes_unreviewed" as const : "approved_only" as const };
-  const scope = await searchScope(db, ai, opts.question);
-  const a = await assessAudience(db, ai, { question: opts.question, scope, audience: opts.audience, includeUnreviewed: opts.includeUnreviewed, now: opts.now });
+  const base: Pick<Answer, "id" | "question" | "audience" | "savedAt" | "evidenceStatus"> & { autoAudience?: boolean } = { id, question: opts.question, audience: opts.audience, savedAt: new Date().toISOString(), evidenceStatus: opts.includeUnreviewed ? "includes_unreviewed" as const : "approved_only" as const };
+  const auto = !!opts.autoAudience && !opts.audience.length;
+  const scope = await searchScope(db, ai, opts.question, "", auto);
+  const audience = auto ? scope.audience ?? [] : opts.audience;
+  Object.assign(base, { audience, ...(auto ? { autoAudience: true } : {}) });
+  const a = await assessAudience(db, ai, { question: opts.question, scope, audience, includeUnreviewed: opts.includeUnreviewed, now: opts.now });
   let result: Answer;
   if (a.empty) {
     result = insufficient(base, a.confidence, "We don't have research that speaks to this question for this audience.");

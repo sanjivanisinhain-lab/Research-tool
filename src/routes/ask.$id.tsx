@@ -49,6 +49,13 @@ function AnswerPage() {
       </div>
       <h1 className="mt-6 text-3xl font-semibold md:text-[2.5rem] md:leading-tight">{a.question}</h1>
       <p className="mt-2 text-sm text-muted-foreground">{a.audience.map((x) => x.name).join(" · ")} · saved {relativeTime(a.savedAt)}</p>
+      {a.autoAudience && (
+        <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-brand/30 bg-brand-soft/50 px-4 py-2.5 text-sm">
+          <span><strong>Audience chosen for you:</strong> {a.audience.length ? a.audience.map((x) => x.name).join(" + ") : "all users (the question didn't point to one group)"}</span>
+          {a.audience.length > 0 && <Button variant="link" className="h-auto p-0" disabled={reask.isPending} onClick={() => reask.mutate({ question: a.question, audience: [], mode: "combine", attachments: a.attachments ?? [] })}>Use all users instead</Button>}
+          <Button variant="link" className="h-auto p-0" onClick={() => setPicker(true)}>Choose another</Button>
+        </p>
+      )}
       <div className="mt-4"><PersonaChips selected={a.audience.map((x) => x.id)} onSelect={(p) => reask.mutate({ question: a.question, audience: [p], mode: "combine", attachments: a.attachments ?? [] })} /></div>
       <div className="mt-6 rounded-2xl border bg-card/60 p-5">
         <Eyebrow>You asked</Eyebrow><p className="mt-1.5">{a.question}</p>

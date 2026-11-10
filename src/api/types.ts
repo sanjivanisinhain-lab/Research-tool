@@ -18,6 +18,7 @@ export type AskInput = {
   audience: AudienceRef[];
   mode: "combine" | "compare";
   attachments: Attachment[];
+  autoAudience?: boolean; // let the server pick the audience from the question
   contextAnswerId?: string; // the answer this question is about (used by "How should I test this?")
 };
 
