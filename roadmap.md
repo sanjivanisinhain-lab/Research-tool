@@ -1,0 +1,12 @@
+# Roadmap
+- [x] Add simulated CX voice playback with synchronized transcript and translation in evidence/source views
+- [x] Add Ask microphone dictation and pasted transcript material without promoting it to evidence
+- [x] Refine audience picker and counted pill chips against PDF references
+- [x] Polish shared visual hierarchy, states, and responsive screens; verify flows
+- [x] Fix build errors and verify Research Hub loads without errors
+- [x] Make persona replies conversational in first person, preserving research grounding and simulation banner
+- [x] Make evidence direction information work on hover and click
+- [x] Open simulated source context from Evidence Drawer
+- [x] Offer persona selection chips across relevant views using uploaded wireframes as reference
+- [x] Verify typed mock data flow and document proposed backend schema and runtime constraints
+- [x] Provide the mock frontend screens: shell, onboarding, ask, answer variants, assess, persona chat, audiences and saved work

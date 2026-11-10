@@ -1,0 +1,51 @@
+import type {
+  Answer,
+  Assessment,
+  Attachment,
+  AudienceKind,
+  AudienceProfile,
+  AudienceRef,
+  ChatMessage,
+  EvidenceItem,
+  FollowUp,
+  Profile,
+  SavedWorkItem,
+} from "@/types/research";
+
+export type AskInput = {
+  question: string;
+  audience: AudienceRef[];
+  mode: "combine" | "compare";
+  attachments: Attachment[];
+};
+
+export type AssessmentInput = {
+  prototype: Assessment["prototype"];
+  task: string;
+  goal?: string;
+  audience: AudienceRef[];
+};
+
+export interface ResearchApi {
+  // profile
+  getProfile(): Promise<Profile | null>;
+  saveProfile(profile: Profile): Promise<Profile>;
+  // audiences
+  listAudiences(): Promise<AudienceProfile[]>;
+  getAudience(kind: AudienceKind, id: string): Promise<AudienceProfile | null>;
+  countParticipants(audience: AudienceRef[]): Promise<number>;
+  // ask
+  ask(input: AskInput): Promise<{ id: string }>;
+  getAnswer(id: string): Promise<Answer | null>;
+  followUp(answerId: string, question: string): Promise<FollowUp>;
+  // evidence
+  getEvidence(ids: string[]): Promise<EvidenceItem[]>;
+  // saved work
+  listSavedWork(): Promise<SavedWorkItem[]>;
+  // assessments
+  createAssessment(input: AssessmentInput): Promise<{ id: string }>;
+  getAssessment(id: string): Promise<Assessment | null>;
+  // persona chat
+  getPersonaConversation(personaId: string): Promise<ChatMessage[]>;
+  sendPersonaMessage(personaId: string, text: string): Promise<ChatMessage>;
+}
