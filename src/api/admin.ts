@@ -24,6 +24,12 @@ export type AdminSource = { id: string; title: string; sourceType: string; origi
 export type JobsInfo = { counts: { status: string; n: number }[]; transcriptions: { id: number; status: string; note: string; study: string; createdAt: string }[]; recentFailures: { id: number; kind: string; sourceId: string | null; error: string }[]; aiConfigured: boolean };
 export type ReviewItem = { id: number; participantId: string; quote: string; translation: string | null; kind: "said" | "did"; provenance: string; theme: string; sentiment: string; flags: string; sourceType: string; date: string | null; originalLanguage: string; sourceTitle: string; quality: string | null };
 
+export type StudyRequestItem = {
+  id: string; answerId: string; title: string; note: string | null; teamNote: string | null; status: "new" | "accepted" | "in_progress" | "done" | "declined"; createdAt: string; updatedAt: string;
+  requester: { role?: string; team?: string; area?: string; name?: string };
+  plan: { question: string; audience: { name: string }[]; studyPlan: { method?: string; objective: string; audience: string; task: string; watchFor: string; questions: string[] }; known: { title: string; body: string }[]; unknowns: { title: string; body: string }[] };
+};
+
 export const adminApi = {
   upload(file: File, m: UploadMeta, ackRecordings = false): Promise<UploadResult> {
     const q = new URLSearchParams({ study: m.study, product: m.product, kind: m.kind, names: m.names, filename: file.name });
@@ -38,5 +44,7 @@ export const adminApi = {
   review: (status: "pending" | "approved" | "rejected", limit = 25) => call<{ total: number; items: ReviewItem[] }>(`/api/admin/evidence?status=${status}&limit=${limit}`),
   setStatus: (id: number, action: "approve" | "reject", note?: string) => call(`/api/admin/evidence/${id}/${action}`, json("POST", { note })),
   approveSource: (id: string) => call<{ approved: number }>(`/api/admin/sources/${id}/approve-all`, json("POST")),
+  studyRequests: () => call<StudyRequestItem[]>("/api/admin/study-requests"),
+  updateStudyRequest: (id: string, patch: { status?: StudyRequestItem["status"]; teamNote?: string }) => call(`/api/admin/study-requests/${id}`, json("PATCH", patch)),
   contribute: (text: string, kind: "cx_call" | "interview") => call<{ received: boolean }>("/api/contributions", json("POST", { text, kind })),
 };

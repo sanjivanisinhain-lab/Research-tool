@@ -50,7 +50,7 @@ export class MockProvider implements AiProvider {
   readonly name = "mock";
   readonly model = "mock-1";
   calls = 0;
-  constructor(private responder: (req: JsonRequest) => unknown) {}
+  constructor(readonly responder: (req: JsonRequest) => unknown) {}
   media: Media[][] = [];
   async generateJson<T>(req: JsonRequest): Promise<T> { this.calls++; return this.responder(req) as T; }
   async generateJsonWithMedia<T>(req: JsonRequest, media: Media[]): Promise<T> { this.calls++; this.media.push(media); return this.responder(req) as T; }

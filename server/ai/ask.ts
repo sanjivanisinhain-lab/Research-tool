@@ -6,6 +6,7 @@ import { computeConfidence, type Signal } from "../confidence";
 import { audienceParticipants, emptyImps, ROLES } from "./shared";
 import { attachmentsText, looksLikeScript } from "../attachments";
 import { reviewScript } from "./script";
+import { planStudy, wantsStudyPlan } from "./plan";
 import { ftsQuery, searchEvidence, type Hit } from "../search";
 import type { Answer, Attachment, AudienceRef, ClaimLabel, ComparisonColumn, FollowUp, Implications, Pattern, Role } from "../../src/types/research";
 
@@ -46,7 +47,7 @@ type Raw = {
 
 
 
-export type AskOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date; attachments?: Attachment[] };
+export type AskOpts = { question: string; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date; attachments?: Attachment[]; contextAnswerId?: string };
 
 type Assessed = {
   raw: Raw; conf: ReturnType<typeof computeConfidence>; confidence: Answer["confidence"];
@@ -111,6 +112,14 @@ export async function answerQuestion(db: Db, ai: AiProvider, opts: AskOpts): Pro
   if (looksLikeScript(opts.question, scriptText)) {
     const review = await reviewScript(db, ai, { question: opts.question, script: scriptText || opts.question, audience: opts.audience, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) });
     if (review) return review;
+  }
+  // "How should I test this?" and similar: plan the next study from what we know and don't know.
+  if (wantsStudyPlan(opts.question)) {
+    const prev = opts.contextAnswerId ? (db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(opts.contextAnswerId) as { j: string } | undefined) : undefined;
+    const context = prev ? (JSON.parse(prev.j) as Answer) : null;
+    const audience = opts.audience.length || !context ? opts.audience : context.audience;
+    const terms = await searchTerms(ai, context ? context.question : opts.question);
+    return planStudy(db, ai, { question: opts.question, audience, terms, context, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) });
   }
   const id = "ans-" + crypto.randomBytes(5).toString("hex");
   const base = { id, question: opts.question, audience: opts.audience, savedAt: new Date().toISOString(), evidenceStatus: opts.includeUnreviewed ? "includes_unreviewed" as const : "approved_only" as const };

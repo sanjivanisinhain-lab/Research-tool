@@ -49,7 +49,8 @@ function AnswerPage() {
         <Eyebrow>You asked</Eyebrow><p className="mt-1.5">{a.question}</p>
         {a.attachments?.length ? <p className="mt-2 text-xs text-muted-foreground">Your material: {a.attachments.map((x) => x.name).join(", ")}</p> : null}
       </div>
-      <div className="mt-10"><AnswerView answer={a} role={profile.data?.role ?? "designer"} onFollowUp={focus} onCompare={() => setPicker(true)} onPlanTest={() => reask.mutate({ question: "How should I test this?", audience: a.audience, mode: "combine", attachments: [] })} /></div>
+      <div className="mt-10"><AnswerView answer={a} role={profile.data?.role ?? "designer"} onFollowUp={focus} onCompare={() => setPicker(true)} onPlanTest={() => reask.mutate({ question: "How should I test this?", audience: a.audience, mode: "combine", attachments: [], contextAnswerId: a.id })}
+          {...(a.variant === "study_plan" && a.studyPlan ? { onReviewQuestions: () => reask.mutate({ question: "Check these questions for bias", audience: a.audience, mode: "combine", attachments: [{ name: "Study plan questions", kind: "transcript", text: a.studyPlan!.questions.map((q, i) => `${i + 1}. ${q}`).join("\n") }] }) } : {})} /></div>
       {(a.followUps?.length ?? 0) > 0 && (
         <div className="mt-12 space-y-4">
           {a.followUps?.map((f) => (

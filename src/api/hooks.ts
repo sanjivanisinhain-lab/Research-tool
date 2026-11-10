@@ -19,3 +19,9 @@ export const useEvidence = (ids: string[]) =>
 export const useSavedWork = () => useQuery({ queryKey: ["saved"], queryFn: () => api.listSavedWork() });
 export const usePersonaConversation = (pid: string) =>
   useQuery({ queryKey: ["persona-chat", pid], queryFn: () => api.getPersonaConversation(pid) });
+export const useStudyRequest = (answerId: string, enabled = true) =>
+  useQuery({ queryKey: ["study-request", answerId], queryFn: () => api.getStudyRequest(answerId), enabled });
+export function useRequestStudy(answerId: string) {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (note: string) => api.requestStudy(answerId, note), onSuccess: (r) => qc.setQueryData(["study-request", answerId], r) });
+}

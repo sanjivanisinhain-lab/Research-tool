@@ -103,6 +103,22 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   });
   app.post("/api/admin/jobs/:id/retry", (req, res) => (retryJob(db, Number(req.params.id)) ? res.json({ ok: true }) : res.status(404).json({ error: "no failed job with that id" })));
 
+  // Study requests: the research team's side
+  app.get("/api/admin/study-requests", (req, res) => {
+    const status = typeof req.query.status === "string" ? req.query.status : null;
+    const rows = db.prepare("SELECT id, answer_id AS answerId, title, plan_json p, requester_json r, note, status, team_note AS teamNote, created_at AS createdAt, updated_at AS updatedAt FROM study_requests WHERE (? IS NULL OR status = ?) ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'accepted' THEN 1 WHEN 'in_progress' THEN 2 ELSE 3 END, created_at DESC LIMIT 200").all(status, status) as any[];
+    res.json(rows.map((r) => ({ ...r, plan: JSON.parse(r.p), requester: JSON.parse(r.r), p: undefined, r: undefined })));
+  });
+  app.patch("/api/admin/study-requests/:id", (req, res) => {
+    const b = req.body ?? {};
+    if (b.status !== undefined && !["new", "accepted", "in_progress", "done", "declined"].includes(b.status)) return res.status(400).json({ error: "bad status" });
+    const r = db.prepare("UPDATE study_requests SET status=COALESCE(?,status), team_note=COALESCE(?,team_note), updated_at=? WHERE id=?")
+      .run(b.status ?? null, typeof b.teamNote === "string" ? b.teamNote.slice(0, 2000) : null, new Date().toISOString(), req.params.id);
+    if (!r.changes) return res.status(404).json({ error: "not found" });
+    audit(db, "study_request.update", { id: req.params.id, status: b.status ?? null });
+    res.json({ id: req.params.id });
+  });
+
   // Pending / approved / rejected evidence, with its source context
   app.get("/api/admin/evidence", (req, res) => {
     const status = String(req.query.status ?? "pending");
@@ -170,6 +186,24 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     res.status(202).json({ received: true, status: "pending_review" });
   });
 
+  // ---------- Study requests: a user asks the research team to run a planned study ----------
+  const requestRow = (answerId: string) => db.prepare("SELECT id, status, team_note AS teamNote, note, created_at AS createdAt, updated_at AS updatedAt FROM study_requests WHERE answer_id=?").get(answerId);
+  app.get("/api/answers/:id/study-request", (req, res) => res.json(requestRow(req.params.id) ?? null));
+  app.post("/api/answers/:id/study-request", (req, res) => {
+    const row = db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(req.params.id) as { j: string } | undefined;
+    if (!row) return res.status(404).json({ error: "plan not found" });
+    const answer = JSON.parse(row.j) as { variant: string; question: string; headline: string; audience: AudienceRef[]; studyPlan?: unknown; known?: unknown; unknowns?: unknown };
+    if (answer.variant !== "study_plan" || !answer.studyPlan) return res.status(400).json({ error: "only a study plan can be requested" });
+    if (requestRow(req.params.id)) return res.status(409).json({ error: "already requested", request: requestRow(req.params.id) });
+    const profile = db.prepare("SELECT role, team, area, name FROM profiles WHERE id='me'").get() ?? {};
+    const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 2000) : "";
+    const id = "req-" + crypto.randomBytes(4).toString("hex"); const now = new Date().toISOString();
+    db.prepare("INSERT INTO study_requests(id,answer_id,title,plan_json,requester_json,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(id, req.params.id, answer.headline.replace(/^Recommended next test: /, ""), JSON.stringify({ question: answer.question, audience: answer.audience, studyPlan: answer.studyPlan, known: answer.known ?? [], unknowns: answer.unknowns ?? [] }), JSON.stringify(profile), note || null, now, now);
+    audit(db, "study_request.create", { id, answerId: req.params.id });
+    res.status(201).json(requestRow(req.params.id));
+  });
+
   // ---------- Product API (matches docs/API_CONTRACT.md) ----------
   const latestRun = () => (db.prepare("SELECT id, created_at c FROM synthesis_runs ORDER BY id DESC LIMIT 1").get() as { id: number; c: string } | undefined);
   const statuses = () => (opts.includeUnreviewed ? ["approved", "pending"] : ["approved"]);
@@ -231,7 +265,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     try {
       const a = b.mode === "compare"
         ? await compareAudiences(db, opts.ai, { question: b.question.trim(), audience, includeUnreviewed: opts.includeUnreviewed })
-        : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, attachments: Array.isArray(b.attachments) ? b.attachments : [], includeUnreviewed: opts.includeUnreviewed });
+        : await answerQuestion(db, opts.ai, { question: b.question.trim(), audience, attachments: Array.isArray(b.attachments) ? b.attachments : [], ...(typeof b.contextAnswerId === "string" ? { contextAnswerId: b.contextAnswerId } : {}), includeUnreviewed: opts.includeUnreviewed });
       res.json({ id: a.id });
     } catch (e) { console.error("answer failed:", (e as Error).message); res.status(502).json({ error: "answer generation failed" }); }
   });
@@ -262,7 +296,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const names = (j: string) => (JSON.parse(j) as AudienceRef[]).map((x) => x.name).join(" + ") || "All users";
     const answers = (db.prepare("SELECT id,question,variant,audience_json a,created_at c FROM answers ORDER BY created_at DESC LIMIT 100").all() as any[]).map((r) => ({
       id: r.id, title: r.question.slice(0, 90), type: r.variant === "script_review" ? "script_review" : "answer", audience: names(r.a),
-      status: r.variant === "insufficient" ? "Insufficient evidence" : r.variant === "script_review" ? "Reviewed" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } }));
+      status: r.variant === "insufficient" ? "Insufficient evidence" : r.variant === "script_review" ? "Reviewed" : r.variant === "study_plan" ? "Study plan" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } }));
     const assessments = (db.prepare("SELECT id,task,audience_json a,created_at c,assessment_json j FROM assessments ORDER BY created_at DESC LIMIT 100").all() as any[]).map((r) => ({
       id: r.id, title: (JSON.parse(r.j).title as string) || r.task.slice(0, 90), type: "assessment", audience: names(r.a), status: "Prediction", updatedAt: r.c, target: { to: "/assess/$id", id: r.id } }));
     res.json([...answers, ...assessments].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).slice(0, 100));

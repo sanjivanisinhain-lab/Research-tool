@@ -49,6 +49,8 @@ export type Implications = Record<Role, Implication>;
 export type KnownItem = { title: string; body: string; label: ClaimLabel; evidenceIds?: string[] };
 
 export type StudyPlan = {
+  method?: string; // e.g. "Moderated usability test"
+  rationale?: string; // why this method suits the objective and the existing evidence
   objective: string;
   audience: string;
   task: string;
@@ -195,3 +197,6 @@ export type SavedWorkItem = {
 };
 
 export type Profile = { role: Role; team: string; area: string; note?: string; name?: string };
+
+export type StudyRequestStatus = "new" | "accepted" | "in_progress" | "done" | "declined";
+export type StudyRequest = { id: string; status: StudyRequestStatus; note?: string | null; teamNote?: string | null; createdAt: string; updatedAt: string };

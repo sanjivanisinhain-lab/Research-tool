@@ -61,6 +61,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   db.exec(SCHEMA_V5);
   migrateV6(db);
   db.exec(SCHEMA_V7);
+  db.exec(SCHEMA_V8);
   return db;
 }
 
@@ -189,6 +190,21 @@ CREATE TABLE IF NOT EXISTS assessments (
   id TEXT PRIMARY KEY, task TEXT NOT NULL, audience_json TEXT NOT NULL, includes_unreviewed INTEGER NOT NULL DEFAULT 0,
   assessment_json TEXT NOT NULL, image_path TEXT, image_mime TEXT, created_at TEXT NOT NULL
 );
+`;
+
+export const SCHEMA_V8 = `
+CREATE TABLE IF NOT EXISTS study_requests (
+  id TEXT PRIMARY KEY,
+  answer_id TEXT NOT NULL UNIQUE REFERENCES answers(id),     -- one request per study plan
+  title TEXT NOT NULL,
+  plan_json TEXT NOT NULL,                                    -- snapshot of the plan when it was requested
+  requester_json TEXT NOT NULL,                               -- role / team / area at the time (no contact details)
+  note TEXT,                                                  -- what the requester wants the team to know
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','accepted','in_progress','done','declined')),
+  team_note TEXT,                                             -- the research team's reply
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_study_requests_status ON study_requests(status);
 `;
 
 export function migrateV4(db: Db) {

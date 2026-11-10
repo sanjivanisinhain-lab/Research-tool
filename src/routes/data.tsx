@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileUp, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { adminApi, adminToken, AdminAuthError, type AdminSource, type Redaction, type UploadResult } from "@/api/admin";
+import { adminApi, adminToken, AdminAuthError, type AdminSource, type Redaction, type StudyRequestItem, type UploadResult } from "@/api/admin";
 import { EmptyState, ErrorState, LoadingBlock, PageHeader, StatusBadge, relativeTime } from "@/components/research/primitives";
 import { cn } from "@/lib/utils";
 
@@ -33,11 +33,13 @@ function DataPage() {
           <TabsTrigger value="upload" className="rounded-full">Upload</TabsTrigger>
           <TabsTrigger value="sources" className="rounded-full">Sources</TabsTrigger>
           <TabsTrigger value="review" className="rounded-full">Review queue</TabsTrigger>
+          <RequestsTrigger />
           <TabsTrigger value="note" className="rounded-full">Add a note</TabsTrigger>
         </TabsList>
         <TabsContent value="upload"><UploadTab /></TabsContent>
         <TabsContent value="sources"><SourcesTab /></TabsContent>
         <TabsContent value="review"><ReviewTab /></TabsContent>
+        <TabsContent value="requests"><RequestsTab /></TabsContent>
         <TabsContent value="note"><NoteTab /></TabsContent>
       </Tabs>
     </div>
@@ -259,5 +261,63 @@ function NoteTab() {
         {send.isError && <span className="text-sm text-risk">{(send.error as Error).message}</span>}
       </div>
     </form>
+  );
+}
+
+function RequestsTrigger() {
+  const q = useQuery({ queryKey: ["admin", "requests"], queryFn: adminApi.studyRequests, refetchInterval: 15000 });
+  const fresh = (q.data ?? []).filter((r) => r.status === "new").length;
+  return <TabsTrigger value="requests" className="rounded-full">Study requests{fresh > 0 && <span className="ml-1.5 rounded-full bg-foreground px-1.5 text-[10px] font-semibold text-background">{fresh}</span>}</TabsTrigger>;
+}
+
+const REQ_STATUS: { value: StudyRequestItem["status"]; label: string }[] = [{ value: "new", label: "New" }, { value: "accepted", label: "Accepted" }, { value: "in_progress", label: "In progress" }, { value: "done", label: "Done" }, { value: "declined", label: "Declined" }];
+
+function RequestsTab() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["admin", "requests"], queryFn: adminApi.studyRequests });
+  const save = useMutation({ mutationFn: (v: { id: string; status?: StudyRequestItem["status"]; teamNote?: string }) => adminApi.updateStudyRequest(v.id, { ...(v.status ? { status: v.status } : {}), ...(v.teamNote !== undefined ? { teamNote: v.teamNote } : {}) }), onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "requests"] }) });
+  if (q.isLoading) return <div className="mt-6"><LoadingBlock /></div>;
+  if (q.isError) return <div className="mt-6"><ErrorState onRetry={() => q.refetch()} /></div>;
+  if (!q.data?.length) return <div className="mt-6"><EmptyState title="No study requests" body="When someone plans a test and asks the research team to run it, it shows up here with their role, team and note." /></div>;
+  return (
+    <ul className="mt-6 space-y-4">
+      {q.data.map((r) => <RequestCard key={r.id} r={r} onSave={(v) => save.mutate({ id: r.id, ...v })} saving={save.isPending} />)}
+    </ul>
+  );
+}
+
+function RequestCard({ r, onSave, saving }: { r: StudyRequestItem; onSave: (v: { status?: StudyRequestItem["status"]; teamNote?: string }) => void; saving: boolean }) {
+  const [reply, setReply] = useState(r.teamNote ?? "");
+  const [open, setOpen] = useState(r.status === "new");
+  const who = [r.requester.role, r.requester.team, r.requester.area].filter(Boolean).join(" · ") || "Unknown requester";
+  return (
+    <li className="rounded-2xl border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-display text-lg font-semibold">{r.title}</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">{who} · {r.plan.audience.map((a) => a.name).join(" + ") || "All users"} · requested {relativeTime(r.createdAt)}</p>
+        </div>
+        <select aria-label="Status" className="h-9 rounded-full border bg-background px-3 text-sm" value={r.status} onChange={(e) => onSave({ status: e.target.value as StudyRequestItem["status"] })} disabled={saving}>
+          {REQ_STATUS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+      </div>
+      {r.note && <p className="mt-3 rounded-xl bg-secondary p-3 text-sm"><span className="eyebrow mr-2">Their note</span>{r.note}</p>}
+      <button className="mt-3 text-sm font-medium underline-offset-2 hover:underline" onClick={() => setOpen((o) => !o)}>{open ? "Hide plan" : "Show plan"}</button>
+      {open && (
+        <div className="mt-3 space-y-3 text-sm">
+          <p><span className="eyebrow mr-2">Asked about</span>{r.plan.question}</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {([["Objective", r.plan.studyPlan.objective], ["Audience & sample", r.plan.studyPlan.audience], ["Task", r.plan.studyPlan.task], ["Watch for", r.plan.studyPlan.watchFor]] as const).map(([k, v]) => <div key={k}><p className="eyebrow">{k}</p><p className="mt-1">{v}</p></div>)}
+          </div>
+          <div><p className="eyebrow">Questions</p><ol className="mt-1 list-decimal space-y-1 pl-5">{r.plan.studyPlan.questions.map((x) => <li key={x}>{x}</li>)}</ol></div>
+          {r.plan.known.length > 0 && <div><p className="eyebrow">Already well understood</p><ul className="mt-1 list-disc space-y-1 pl-5">{r.plan.known.map((k) => <li key={k.title}><span className="font-medium">{k.title}</span>: {k.body}</li>)}</ul></div>}
+          {r.plan.unknowns.length > 0 && <div><p className="eyebrow">Needs validation</p><ul className="mt-1 list-disc space-y-1 pl-5">{r.plan.unknowns.map((k) => <li key={k.title}><span className="font-medium">{k.title}</span>: {k.body}</li>)}</ul></div>}
+        </div>
+      )}
+      <div className="mt-4 flex gap-2">
+        <input aria-label="Reply to the requester" className={field} placeholder="Reply to the requester (shown on their plan)" value={reply} onChange={(e) => setReply(e.target.value)} />
+        <Button size="sm" className="rounded-full" disabled={saving || reply === (r.teamNote ?? "")} onClick={() => onSave({ teamNote: reply })}>Send reply</Button>
+      </div>
+    </li>
   );
 }

@@ -24,6 +24,8 @@ export const httpApi: ResearchApi = {
   ask: (input) => post("/api/answers", input),
   getAnswer: (id) => req(`/api/answers/${id}`),
   followUp: (id, question) => post(`/api/answers/${id}/follow-ups`, { question }),
+  getStudyRequest: (answerId) => req(`/api/answers/${answerId}/study-request`),
+  requestStudy: (answerId, note) => post(`/api/answers/${answerId}/study-request`, { note }),
   getEvidence: (ids) => req(`/api/evidence?ids=${encodeURIComponent(ids.join(","))}`),
   listSavedWork: () => req("/api/saved-work"),
   createAssessment: (input) => post("/api/assessments", input),

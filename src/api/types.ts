@@ -10,6 +10,7 @@ import type {
   FollowUp,
   Profile,
   SavedWorkItem,
+  StudyRequest,
 } from "@/types/research";
 
 export type AskInput = {
@@ -17,6 +18,7 @@ export type AskInput = {
   audience: AudienceRef[];
   mode: "combine" | "compare";
   attachments: Attachment[];
+  contextAnswerId?: string; // the answer this question is about (used by "How should I test this?")
 };
 
 export type AssessmentInput = {
@@ -38,6 +40,9 @@ export interface ResearchApi {
   ask(input: AskInput): Promise<{ id: string }>;
   getAnswer(id: string): Promise<Answer | null>;
   followUp(answerId: string, question: string): Promise<FollowUp>;
+  // study requests: send a planned study to the research team
+  getStudyRequest(answerId: string): Promise<StudyRequest | null>;
+  requestStudy(answerId: string, note: string): Promise<StudyRequest>;
   // evidence
   getEvidence(ids: string[]): Promise<EvidenceItem[]>;
   // saved work

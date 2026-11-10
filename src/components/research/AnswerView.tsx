@@ -10,17 +10,22 @@ import { ConfidenceRing, EvidenceDirectionBar, MetricsCard } from "./Metrics";
 import { ClaimTag, SignalPill, Eyebrow, CitationChip } from "./primitives";
 import { useEvidenceDrawer } from "./EvidenceDrawer";
 import { Button } from "@/components/ui/button";
+import { useRequestStudy, useStudyRequest } from "@/api/hooks";
+import { IS_MOCK } from "@/config/dataMode";
+import { useState } from "react";
+import { relativeTime, StatusBadge } from "./primitives";
 
 export function allEvidenceIds(a: Answer) {
   return [
     ...a.patterns.flatMap((p) => p.evidenceIds),
     ...(a.conflict?.evidenceIds ?? []),
     ...(a.scriptReview?.overlap.evidenceIds ?? []),
+    ...(a.known ?? []).flatMap((k) => k.evidenceIds ?? []),
     ...(a.followUps ?? []).flatMap((f) => f.evidenceIds),
   ];
 }
 
-export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest }: { answer: Answer; role: Role; onFollowUp: () => void; onCompare: () => void; onPlanTest: () => void }) {
+export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest, onReviewQuestions }: { answer: Answer; role: Role; onFollowUp: () => void; onCompare: () => void; onPlanTest: () => void; onReviewQuestions?: () => void }) {
   const ids = useMemo(() => allEvidenceIds(answer), [answer]);
   const ev = useEvidence(ids);
   const map = useMemo(() => new Map<string, EvidenceItem>((ev.data ?? []).map((e) => [e.id, e])), [ev.data]);
@@ -44,7 +49,7 @@ export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest }: 
         </>
       )}
 
-      {answer.variant === "study_plan" && answer.studyPlan && <StudyPlanBody answer={answer} />}
+      {answer.variant === "study_plan" && answer.studyPlan && <StudyPlanBody answer={answer} map={map} />}
       {answer.variant === "insufficient" && <InsufficientBody answer={answer} onPlanTest={onPlanTest} />}
       {answer.variant === "script_review" && answer.scriptReview && <ScriptReviewBody answer={answer} map={map} />}
       {answer.variant === "comparison" && answer.comparison && <ComparisonBody answer={answer} />}
@@ -55,6 +60,8 @@ export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest }: 
         actions={
           answer.variant === "insufficient"
             ? [{ label: "Build test plan", primary: true, onClick: onPlanTest }, { label: "Ask follow-up", onClick: onFollowUp }]
+            : answer.variant === "study_plan"
+              ? [{ label: "Ask follow-up", primary: true, onClick: onFollowUp }, ...(onReviewQuestions ? [{ label: "Check these questions for bias", onClick: onReviewQuestions }] : [])]
             : answer.variant === "comparison"
               ? [{ label: "Ask follow-up", primary: true, onClick: onFollowUp }, { label: "Plan usability test", onClick: onPlanTest }]
               : [{ label: "Ask follow-up", primary: true, onClick: onFollowUp }, { label: "Compare audience", onClick: onCompare }, { label: "Plan usability test", onClick: onPlanTest }]
@@ -77,14 +84,15 @@ function SaidDid({ answer, map }: { answer: Answer; map: Map<string, EvidenceIte
   );
 }
 
-function StudyPlanBody({ answer }: { answer: Answer }) {
+function StudyPlanBody({ answer, map }: { answer: Answer; map: Map<string, EvidenceItem> }) {
   const p = answer.studyPlan!;
-  const text = `Objective: ${p.objective}\nAudience: ${p.audience}\nTask: ${p.task}\nWatch for: ${p.watchFor}\n\nQuestions:\n${p.questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}`;
+  const drawer = useEvidenceDrawer();
+  const text = `${p.method ?? "Study plan"}\n${p.rationale ?? ""}\n\nObjective: ${p.objective}\nAudience: ${p.audience}\nTask: ${p.task}\nWatch for: ${p.watchFor}\n\nQuestions:\n${p.questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}`;
   return (
     <>
       <div className="mt-8 rounded-2xl border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
-          <div><Eyebrow>Suggested next step</Eyebrow><p className="mt-1 font-display text-xl font-semibold">A focused moderated study</p></div>
+          <div><Eyebrow>Suggested next step</Eyebrow><p className="mt-1 font-display text-xl font-semibold">{p.method ?? "A focused moderated study"}</p>{p.rationale && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{p.rationale}</p>}</div>
           <Button variant="outline" className="rounded-full" onClick={() => { navigator.clipboard?.writeText(text); toast.success("Plan copied"); }}><Copy className="size-4" /> Copy plan</Button>
         </div>
         <div className="grid gap-px bg-border sm:grid-cols-2">
@@ -93,6 +101,19 @@ function StudyPlanBody({ answer }: { answer: Answer }) {
           ))}
         </div>
       </div>
+      {(answer.known?.length ?? 0) > 0 && (
+        <Section eyebrow="Already well understood" title="Don't spend session time re-learning this">
+          <div className="space-y-3">
+            {answer.known!.map((k) => (
+              <div key={k.title} className="rounded-2xl border bg-card p-5">
+                <div className="flex items-center gap-2"><ClaimTag label={k.label} /><p className="font-semibold">{k.title}</p></div>
+                <p className="mt-1 text-muted-foreground">{k.body}</p>
+                <div className="mt-3 flex flex-wrap gap-2">{(k.evidenceIds ?? []).slice(0, 6).map((id) => map.get(id) && <CitationChip key={id} item={map.get(id)!} onClick={() => drawer.open(k.evidenceIds ?? [], map.get(id)!.stance)} />)}</div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
       <Section eyebrow="Questions to ask">
         <ol className="space-y-2">
           {p.questions.map((q, i) => (
@@ -100,7 +121,8 @@ function StudyPlanBody({ answer }: { answer: Answer }) {
           ))}
         </ol>
       </Section>
-      <div className="mt-8 space-y-4">{answer.unknowns.map((u) => <UnknownCard key={u.title} {...u} />)}</div>
+      {!IS_MOCK && <RequestPanel answerId={answer.id} />}
+      {answer.unknowns.length > 0 && <Section eyebrow="Needs validation" title="What this study should settle"><div className="space-y-4">{answer.unknowns.map((u) => <UnknownCard key={u.title} {...u} />)}</div></Section>}
     </>
   );
 }
@@ -229,5 +251,40 @@ function ComparisonBody({ answer }: { answer: Answer }) {
       )}
       <div className="mt-6 space-y-3">{answer.unknowns.map((u) => <UnknownCard key={u.title} {...u} />)}</div>
     </>
+  );
+}
+
+const REQUEST_STATUS: Record<string, { label: string; tone: "neutral" | "strong" | "mixed" | "risk" }> = {
+  new: { label: "Sent: waiting for the research team", tone: "mixed" }, accepted: { label: "Accepted by the research team", tone: "strong" },
+  in_progress: { label: "In progress", tone: "strong" }, done: { label: "Done", tone: "strong" }, declined: { label: "Declined", tone: "risk" },
+};
+
+// Optional hand-off: the person who planned the study can ask the research team to run it.
+function RequestPanel({ answerId }: { answerId: string }) {
+  const existing = useStudyRequest(answerId);
+  const send = useRequestStudy(answerId);
+  const [note, setNote] = useState("");
+  if (existing.isLoading) return null;
+  const r = existing.data;
+  return (
+    <div className="mt-8 rounded-2xl border bg-card p-6">
+      <Eyebrow>Want the research team to run this?</Eyebrow>
+      {r ? (
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-2"><StatusBadge tone={REQUEST_STATUS[r.status]?.tone ?? "neutral"}>{REQUEST_STATUS[r.status]?.label ?? r.status}</StatusBadge><span className="text-xs text-muted-foreground">requested {relativeTime(r.createdAt)}</span></div>
+          {r.note && <p className="text-sm text-muted-foreground">Your note: {r.note}</p>}
+          {r.teamNote && <p className="rounded-xl bg-secondary p-3 text-sm"><span className="eyebrow mr-2">Research team</span>{r.teamNote}</p>}
+        </div>
+      ) : (
+        <form className="mt-2" onSubmit={(e) => { e.preventDefault(); send.mutate(note); }}>
+          <p className="text-sm text-muted-foreground">Send this plan to the research team along with your role and team. Add anything they should know, such as timing or the decision it supports.</p>
+          <textarea aria-label="Note for the research team" rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional: why it matters and when you need it" className="mt-3 w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/40" />
+          <div className="mt-3 flex items-center gap-3">
+            <Button type="submit" className="rounded-full" disabled={send.isPending}>{send.isPending ? "Sending…" : "Request this study"}</Button>
+            {send.isError && <span className="text-sm text-risk">{(send.error as Error).message}</span>}
+          </div>
+        </form>
+      )}
+    </div>
   );
 }

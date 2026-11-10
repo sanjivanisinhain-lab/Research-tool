@@ -84,6 +84,9 @@ export const mockApi: ResearchApi = {
     return delay({ id }, 200);
   },
   getAnswer: (id) => delay(answers.get(id) ?? null),
+  // The demo has no research team to receive requests; nothing is sent anywhere.
+  getStudyRequest: () => delay(null),
+  requestStudy: () => Promise.reject(new Error("Requests to the research team are only available with the real backend")),
   async followUp(answerId, question) {
     const a = answers.get(answerId);
     if (!a) throw new Error("Answer not found");
