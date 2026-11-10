@@ -18,15 +18,16 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 const json = (method: string, body?: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
 export type Redaction = { names: number; phones: number; emails: number; places: number };
-export type UploadResult = { status: "processed" | "partial" | "failed" | "unsupported"; message: string; format?: string; sourcesAdded: number; sourcesSkipped: number; participantsAdded: number; redaction: Redaction; jobsQueued?: number };
+export type UploadResult = { status: "processed" | "partial" | "failed" | "unsupported" | "queued"; message: string; format?: string; sourcesAdded: number; sourcesSkipped: number; participantsAdded: number; redaction: Redaction; jobsQueued?: number };
 export type UploadMeta = { study: string; product: string; kind: "cx_call" | "interview"; date: string; names: string };
 export type AdminSource = { id: string; title: string; sourceType: string; origin: string; status: string; submittedBy: "research_team" | "contributor"; date: string | null; quality: string | null; language: string; redaction: Redaction; study: string; participantId: string; createdAt: string; evidence: number; pendingEvidence: number; job: string | null };
-export type JobsInfo = { counts: { status: string; n: number }[]; recentFailures: { id: number; kind: string; sourceId: string | null; error: string }[]; aiConfigured: boolean };
+export type JobsInfo = { counts: { status: string; n: number }[]; transcriptions: { id: number; status: string; note: string; study: string; createdAt: string }[]; recentFailures: { id: number; kind: string; sourceId: string | null; error: string }[]; aiConfigured: boolean };
 export type ReviewItem = { id: number; participantId: string; quote: string; translation: string | null; kind: "said" | "did"; provenance: string; theme: string; sentiment: string; flags: string; sourceType: string; date: string | null; originalLanguage: string; sourceTitle: string; quality: string | null };
 
 export const adminApi = {
-  upload(file: File, m: UploadMeta): Promise<UploadResult> {
+  upload(file: File, m: UploadMeta, ackRecordings = false): Promise<UploadResult> {
     const q = new URLSearchParams({ study: m.study, product: m.product, kind: m.kind, names: m.names, filename: file.name });
+    if (ackRecordings) q.set("ack", "1");
     if (m.date) q.set("date", m.date);
     return call(`/api/admin/upload?${q}`, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: file });
   },

@@ -44,8 +44,8 @@ describe("upload endpoint", () => {
   });
   it("reports unsupported and unusable files clearly, never silently", async () => {
     const av = await put("study=S&filename=call.mp3", Buffer.from("x"));
-    expect(av.status).toBe(422);
-    expect((await av.json()).message).toMatch(/transcri/i);
+    expect(av.status).toBe(400); // recordings need the privacy acknowledgement first
+    expect((await av.json()).error).toMatch(/Gemini/);
     const noNotes = await (await put("study=S&filename=b.csv", "a,b\n1,2\n")).json();
     expect(noNotes).toMatchObject({ status: "failed" });
     expect(noNotes.message).toMatch(/Notes/);

@@ -70,9 +70,9 @@ function addSource(db: Db, row: {
   return res.changes ? id : null;
 }
 
-function addUtterances(db: Db, sourceId: string, participantId: string | null, turns: { speaker: string; text: string }[]) {
-  const ins = db.prepare("INSERT INTO utterances(source_id,participant_id,speaker,seq,text) VALUES (?,?,?,?,?)");
-  turns.forEach((t, i) => ins.run(sourceId, participantId, t.speaker, i, t.text));
+function addUtterances(db: Db, sourceId: string, participantId: string | null, turns: { speaker: string; text: string; start?: number }[]) {
+  const ins = db.prepare("INSERT INTO utterances(source_id,participant_id,speaker,seq,text,start_sec) VALUES (?,?,?,?,?,?)");
+  turns.forEach((t, i) => ins.run(sourceId, participantId, t.speaker, i, t.text, t.start ?? null));
 }
 
 export const CALL_COLUMNS: Record<string, string> = Object.fromEntries(
@@ -150,7 +150,7 @@ export function parseLabelledTurns(raw: string): { speaker: string; text: string
   return turns.filter((t) => t.text);
 }
 
-export type TranscriptOpts = { studyName: string; product: string; date?: string; knownNames?: string[]; termsPath?: string; submittedBy?: SubmittedBy; noisy?: boolean; format: "speaker_blocks" | "labelled" };
+export type TranscriptOpts = { studyName: string; product: string; date?: string; knownNames?: string[]; termsPath?: string; submittedBy?: SubmittedBy; noisy?: boolean; quality?: string; format: "speaker_blocks" | "labelled" };
 
 export function ingestTranscript(db: Db, raw: string, opts: TranscriptOpts): IngestResult {
   const studyId = ensureStudy(db, opts.studyName, opts.product);
@@ -170,7 +170,7 @@ export function ingestTranscript(db: Db, raw: string, opts: TranscriptOpts): Ing
       const key = sha(`transcript|${opts.studyName}|${red.map((t) => t.text).join("\n")}`);
       if (db.prepare("SELECT 1 FROM sources WHERE external_key=?").get(key)) { result.sourcesSkipped++; return; }
       const pid = addParticipant(db, studyId, {});
-      const sid = addSource(db, { studyId, participantId: pid, type: "interview", origin: "verbatim_transcript", title: `${opts.studyName} · interview ${idx + 1}`, date: opts.date ?? null, lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: opts.noisy ? "noisy_asr" : undefined, submittedBy: opts.submittedBy ?? "research_team" });
+      const sid = addSource(db, { studyId, participantId: pid, type: "interview", origin: "verbatim_transcript", title: `${opts.studyName} · interview ${idx + 1}`, date: opts.date ?? null, lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: opts.quality ?? (opts.noisy ? "noisy_asr" : undefined), submittedBy: opts.submittedBy ?? "research_team" });
       if (!sid) { result.sourcesSkipped++; return; }
       addUtterances(db, sid, pid, red);
       result.sourcesAdded++; result.participantsAdded++;
@@ -205,5 +205,29 @@ export function ingestContribution(db: Db, text: string, opts: { kind: "cx_call"
     audit(db, "contribution.received", { sourceId: sid, redaction: red.counts });
     db.exec("COMMIT");
     return { sourceId: sid, participantId: pid };
+  } catch (e) { db.exec("ROLLBACK"); throw e; }
+}
+
+/** A transcript produced by machine transcription of a recording: already split into timed turns. One recording = one participant. */
+export function ingestTimedTranscript(db: Db, turns: { speaker: string; text: string; start?: number }[], opts: { studyName: string; product: string; kind: "interview" | "cx_call"; date?: string | null; knownNames?: string[]; termsPath?: string; submittedBy?: SubmittedBy; mediaSha?: string }): { sourceId: string; participantId: string; redaction: RedactionCounts } | null {
+  const known = loadTerms(opts.termsPath);
+  const terms: TermsStore = { names: [...known.names, ...(opts.knownNames ?? [])], places: known.places };
+  if (opts.knownNames?.length) saveTerms(opts.termsPath, terms);
+  const redact = makeRedactor(terms);
+  let counts = zeroCounts();
+  const red = turns.map((t) => { const r = redact(t.text.trim()); counts = addCounts(counts, r.counts); return { speaker: t.speaker, text: r.text, start: t.start }; }).filter((t) => t.text);
+  if (!red.length) return null;
+  const studyId = ensureStudy(db, opts.studyName, opts.product);
+  const key = sha(`media|${opts.mediaSha ?? red.map((t) => t.text).join("\n")}`);
+  if (db.prepare("SELECT 1 FROM sources WHERE external_key=?").get(key)) return null;
+  db.exec("BEGIN");
+  try {
+    const pid = addParticipant(db, studyId, {});
+    const sid = addSource(db, { studyId, participantId: pid, type: opts.kind, origin: "verbatim_transcript", title: `${opts.studyName} · recording`, date: opts.date ?? null, lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: "asr_gemini", submittedBy: opts.submittedBy ?? "research_team" });
+    if (!sid) { db.exec("ROLLBACK"); return null; }
+    addUtterances(db, sid, pid, red);
+    audit(db, "ingest.recording", { studyId, redaction: counts });
+    db.exec("COMMIT");
+    return { sourceId: sid, participantId: pid, redaction: counts };
   } catch (e) { db.exec("ROLLBACK"); throw e; }
 }

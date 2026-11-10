@@ -13,6 +13,7 @@ export const Route = createFileRoute("/data")({
   component: DataPage,
 });
 
+const isRecording = (name: string) => /\.(mp3|wav|m4a|aac|ogg|opus|flac|mp4|mov|mkv|webm|avi|3gp)$/i.test(name);
 const redactionText = (r: Redaction) => {
   const parts = [r.names && `${r.names} name${r.names === 1 ? "" : "s"}`, r.phones && `${r.phones} number${r.phones === 1 ? "" : "s"}`, r.emails && `${r.emails} email${r.emails === 1 ? "" : "s"}`, r.places && `${r.places} cit${r.places === 1 ? "y" : "ies"}`].filter(Boolean);
   return parts.length ? `Removed ${parts.join(", ")} from the text` : "No names or numbers found in the text";
@@ -68,7 +69,7 @@ function StatusStrip() {
   return (
     <div className="mt-2 rounded-2xl border bg-card p-4">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-        <span className="flex items-center gap-2">{busy > 0 ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4 text-strong" />}{busy > 0 ? `AI is reading ${busy} source${busy === 1 ? "" : "s"}` : "AI is idle"}</span>
+        <span className="flex items-center gap-2">{busy > 0 ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4 text-strong" />}{busy > 0 ? `Working on ${busy} task${busy === 1 ? "" : "s"} (transcribing and reading)` : "AI is idle"}</span>
         <span className="text-muted-foreground">{n("done")} done{n("failed") > 0 && <> · <span className="font-medium text-risk">{n("failed")} failed</span></>}</span>
         {jobs.data && !jobs.data.aiConfigured && <span className="font-medium text-risk">AI key not set: reading is paused</span>}
         <Button variant="outline" size="sm" className="ml-auto rounded-full" disabled={rebuild.isPending || busy > 0} onClick={() => rebuild.mutate()}>
@@ -93,6 +94,7 @@ function UploadTab() {
   const [meta, setMeta] = useState({ study: "", product: "", kind: "cx_call" as "cx_call" | "interview", date: "", names: "" });
   const [rows, setRows] = useState<Row[]>([]);
   const [over, setOver] = useState(false);
+  const [ack, setAck] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const set = (k: keyof typeof meta) => (e: { target: { value: string } }) => setMeta((m) => ({ ...m, [k]: e.target.value }));
 
@@ -102,8 +104,9 @@ function UploadTab() {
     setRows((r) => [...r, ...files.map((f): Row => ({ name: f.name, state: "waiting" }))]);
     const patch = (i: number, p: Partial<Row>) => setRows((r) => r.map((x, j) => (j === offset + i ? { ...x, ...p } : x)));
     for (const [i, f] of files.entries()) {
+      if (isRecording(f.name) && !ack) { patch(i, { state: "done", error: "Tick the box about recordings (left) first, then upload this file again." }); continue; }
       patch(i, { state: "uploading" });
-      try { patch(i, { state: "done", result: await adminApi.upload(f, meta) }); }
+      try { patch(i, { state: "done", result: await adminApi.upload(f, meta, ack) }); }
       catch (e) { patch(i, { state: "done", error: (e as Error).message }); }
     }
     qc.invalidateQueries({ queryKey: ["admin"] });
@@ -126,6 +129,10 @@ function UploadTab() {
         <Label text="Names to remove" hint="Optional. Comma-separated names of participants or interviewers. Names in a spreadsheet's Name column are removed automatically.">
           <input className={field} value={meta.names} onChange={set("names")} placeholder="Asha, Rohit" />
         </Label>
+        <label className="flex gap-2.5 rounded-lg border border-mixed/40 bg-mixed-soft/50 p-3 text-xs">
+          <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={ack} onChange={(e) => setAck(e.target.checked)} aria-label="Approve sending recordings to Gemini" />
+          <span><span className="font-semibold">Recordings (audio or video)</span> are sent to Google Gemini exactly as recorded. Voices and spoken names can't be removed first, and on Gemini's free tier Google may use them to improve its products. Names in the finished transcript are removed. <span className="font-semibold">I approve this for the recordings I upload.</span></span>
+        </label>
         <p className="flex gap-2 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0" />Names, mobile numbers, emails and cities are removed before anything is stored or sent to the AI. Original files and their file names are not kept.</p>
       </div>
       <div>
@@ -135,9 +142,9 @@ function UploadTab() {
           className={cn("grid cursor-pointer place-items-center rounded-2xl border-2 border-dashed bg-card px-6 py-14 text-center transition-colors", over ? "border-foreground bg-secondary" : "hover:bg-secondary/50")}>
           <FileUp className="size-7 text-muted-foreground" />
           <p className="mt-3 font-display text-lg font-semibold">Drop files here, or click to choose</p>
-          <p className="mt-1 text-sm text-muted-foreground">CSV and Excel call notes · transcripts as txt, docx or pdf</p>
-          <p className="mt-1 text-xs text-muted-foreground">Audio, video and scanned PDFs can't be read yet.</p>
-          <input ref={input} type="file" multiple hidden accept=".csv,.xlsx,.xls,.txt,.md,.docx,.pdf,.mp3,.wav,.m4a,.mp4,.mov" onChange={(e) => { run([...(e.target.files ?? [])]); e.target.value = ""; }} />
+          <p className="mt-1 text-sm text-muted-foreground">CSV and Excel call notes · transcripts as txt, docx or pdf · recordings as mp3, wav, m4a, mp4, mov</p>
+          <p className="mt-1 text-xs text-muted-foreground">Recordings are transcribed in the background (audio only; what is on screen in a video is not analysed yet). Scanned PDFs can't be read yet.</p>
+          <input ref={input} type="file" multiple hidden accept=".csv,.xlsx,.xls,.txt,.md,.docx,.pdf,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac,.mp4,.mov,.mkv,.webm" onChange={(e) => { run([...(e.target.files ?? [])]); e.target.value = ""; }} />
         </div>
         <ul className="mt-4 space-y-2">{rows.map((r, i) => <ResultRow key={i} row={r} />)}</ul>
       </div>
@@ -147,7 +154,7 @@ function UploadTab() {
 
 function ResultRow({ row }: { row: Row }) {
   const r = row.result;
-  const tone = row.error || r?.status === "failed" || r?.status === "unsupported" ? "risk" : r?.status === "partial" ? "mixed" : "strong";
+  const tone = row.error || r?.status === "failed" || r?.status === "unsupported" ? "risk" : r?.status === "partial" || r?.status === "queued" ? "mixed" : "strong";
   return (
     <li className="rounded-xl border bg-card p-4 text-sm">
       <div className="flex items-center gap-3">
@@ -171,18 +178,28 @@ function Label({ text, hint, children }: { text: string; hint?: string; children
 const JOB_LABEL: Record<string, string> = { queued: "Waiting for AI", running: "AI reading", done: "Read", failed: "Failed" };
 function SourcesTab() {
   const q = useQuery({ queryKey: ["admin", "sources"], queryFn: adminApi.sources, refetchInterval: 5000 });
+  const jobs = useQuery({ queryKey: ["admin", "jobs"], queryFn: adminApi.jobs, refetchInterval: 4000 });
+  const inProgress = jobs.data?.transcriptions ?? [];
   if (q.isLoading) return <div className="mt-6"><LoadingBlock /></div>;
   if (q.isError) return <div className="mt-6"><ErrorState onRetry={() => q.refetch()} /></div>;
   const rows: AdminSource[] = q.data ?? [];
-  if (!rows.length) return <div className="mt-6"><EmptyState title="No research yet" body="Upload a file on the Upload tab to get started." /></div>;
+  if (!rows.length && !inProgress.length) return <div className="mt-6"><EmptyState title="No research yet" body="Upload a file on the Upload tab to get started." /></div>;
   return (
-    <div className="mt-6 overflow-x-auto rounded-lg border bg-card">
+    <div className="mt-6">
+    {inProgress.length > 0 && (
+      <ul className="mb-4 space-y-2">
+        {inProgress.map((t) => (
+          <li key={t.id} className="flex items-center gap-3 rounded-xl border bg-card px-4 py-3 text-sm"><Loader2 className="size-4 animate-spin text-muted-foreground" /><span className="font-medium">Recording · {t.study}</span><span className="text-muted-foreground">{t.status === "queued" ? "Waiting to start" : t.note}</span><span className="ml-auto text-xs text-muted-foreground">{relativeTime(t.createdAt)}</span></li>
+        ))}
+      </ul>
+    )}
+    <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-left text-sm">
         <thead className="border-b bg-muted/40"><tr>{["Participant", "Study", "Type", "From", "Evidence", "AI", "Privacy", "Added"].map((h) => <th key={h} className="eyebrow px-4 py-3">{h}</th>)}</tr></thead>
         <tbody>{rows.map((s) => (
           <tr key={s.id} className="border-b last:border-0 align-top">
             <td className="px-4 py-3 font-medium tabular-nums">{s.participantId}</td>
-            <td className="px-4 py-3">{s.study}{s.quality === "noisy_asr" && <span className="block text-xs text-mixed">Noisy machine transcript</span>}</td>
+            <td className="px-4 py-3">{s.study}{s.quality === "noisy_asr" && <span className="block text-xs text-mixed">Noisy machine transcript</span>}{s.quality === "asr_gemini" && <span className="block text-xs text-mixed">Machine transcript: check wording</span>}</td>
             <td className="px-4 py-3 text-xs">{s.sourceType === "cx_call" ? "CX call" : "Interview"}<span className="block text-muted-foreground">{s.origin === "researcher_notes" ? "researcher notes" : "verbatim transcript"}</span></td>
             <td className="px-4 py-3"><StatusBadge tone={s.submittedBy === "research_team" ? "strong" : "mixed"}>{s.submittedBy === "research_team" ? "Research team" : "Contributor"}</StatusBadge></td>
             <td className="px-4 py-3 tabular-nums">{s.evidence}{s.pendingEvidence > 0 && <span className="block text-xs text-mixed">{s.pendingEvidence} to review</span>}</td>
@@ -191,6 +208,7 @@ function SourcesTab() {
             <td className="px-4 py-3 text-xs text-muted-foreground">{relativeTime(s.createdAt)}</td>
           </tr>))}</tbody>
       </table>
+    </div>
     </div>
   );
 }

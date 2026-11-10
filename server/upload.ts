@@ -9,7 +9,7 @@ import { CALL_COLUMNS, docxToText, ingestCallsCsv, ingestContribution, ingestTra
 
 export type UploadMeta = { study: string; product: string; kind: "interview" | "cx_call"; date?: string | null; names: string[]; termsPath?: string };
 export type UploadResult = {
-  status: "processed" | "partial" | "failed" | "unsupported"; message: string; format?: string;
+  status: "processed" | "partial" | "failed" | "unsupported" | "queued"; message: string; format?: string;
   sourcesAdded: number; sourcesSkipped: number; participantsAdded: number; redaction: RedactionCounts;
 };
 
@@ -48,7 +48,7 @@ export async function processUpload(db: Db, file: { name: string; buf: Buffer },
   const ext = path.extname(file.name).toLowerCase();
   let result: UploadResult;
   try {
-    if (AUDIO_VIDEO.has(ext)) result = fail("unsupported", "Audio and video can't be transcribed yet. Upload a transcript (txt, docx, pdf) instead. Transcription is the next feature to add.");
+    if (AUDIO_VIDEO.has(ext)) result = fail("unsupported", "Recordings are uploaded through the upload screen (they are transcribed in the background).");
     else if (ext === ".csv") {
       const r = ingestCsvText(db, file.buf.toString("utf8"), meta);
       result = r ? fromIngest(r, "CX call notes (CSV)") : fail("failed", "No 'Notes' column found. A call-notes sheet needs a Notes column (plus any of: Name, City, Mobile Number, Product Name, Date, Type of user, Payment type, Call duration).");

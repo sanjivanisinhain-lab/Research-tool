@@ -59,6 +59,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   db.exec(SCHEMA_V3);
   migrateV4(db);
   db.exec(SCHEMA_V5);
+  migrateV6(db);
   return db;
 }
 
@@ -161,6 +162,27 @@ CREATE TABLE IF NOT EXISTS profiles (
 `;
 
 /** Adds the canonical_theme column on databases created before it existed, then (re)builds the search index. */
+/** Jobs gained a 'transcribe' kind, a payload and a progress note; SQLite can't alter a CHECK, so rebuild the table once. */
+export function migrateV6(db: Db) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'").get() as { sql: string } | undefined;
+  if (row && !row.sql.includes("transcribe")) {
+    db.exec(`ALTER TABLE jobs RENAME TO jobs_old;
+      CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL CHECK (kind IN ('extract','rebuild_audiences','transcribe')),
+        source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed')),
+        error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, payload TEXT, note TEXT
+      );
+      INSERT INTO jobs(id,kind,source_id,status,error,created_at,started_at,finished_at) SELECT id,kind,source_id,status,error,created_at,started_at,finished_at FROM jobs_old;
+      DROP TABLE jobs_old;
+      CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);`);
+  }
+  const ucols = db.prepare("PRAGMA table_info(utterances)").all() as { name: string }[];
+  if (!ucols.some((c) => c.name === "start_sec")) db.exec("ALTER TABLE utterances ADD COLUMN start_sec REAL");
+  db.exec("CREATE TABLE IF NOT EXISTS media_hashes (sha256 TEXT PRIMARY KEY, source_id TEXT REFERENCES sources(id) ON DELETE SET NULL, created_at TEXT NOT NULL)");
+}
+
 export function migrateV4(db: Db) {
   const srcCols = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];
   if (!srcCols.some((c) => c.name === "submitted_by")) db.exec("ALTER TABLE sources ADD COLUMN submitted_by TEXT NOT NULL DEFAULT 'research_team' CHECK (submitted_by IN ('research_team','contributor'))");

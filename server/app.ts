@@ -2,13 +2,18 @@ import express from "express";
 import { audit, type Db } from "./db";
 import { ingestContribution } from "./ingest";
 import { processUpload } from "./upload";
-import { enqueueExtractions, enqueueRebuild, retryJob } from "./jobs";
+import { enqueueExtractions, enqueueRebuild, enqueueTranscription, retryJob } from "./jobs";
+import { MEDIA_EXTS, ffmpegAvailable } from "./media";
+import { newUploadPath } from "./ai/transcribe";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; adminToken?: string };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; adminToken?: string; mediaDir?: string; maxMediaBytes?: number };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
@@ -26,6 +31,37 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   });
 
   // Upload one file. Body = the raw file; details in the query string. Processed immediately, AI extraction runs as a background job.
+  // Recordings are streamed to disk (they can be large) and transcribed by a background job.
+  app.put("/api/admin/upload", async (req, res, next) => {
+    const ext = path.extname(String(req.query.filename ?? "")).toLowerCase();
+    if (!MEDIA_EXTS.has(ext)) return next();
+    const q = req.query;
+    const study = String(q.study ?? "").trim().slice(0, 120);
+    if (!study) return res.status(400).json({ error: "study name required" });
+    if (q.ack !== "1") return res.status(400).json({ error: "Please confirm that recordings are sent to Google Gemini as recorded." });
+    if (!(await ffmpegAvailable())) return res.status(501).json({ error: "ffmpeg is not installed on the server, so recordings can't be processed." });
+    const max = opts.maxMediaBytes ?? 1.5 * 1024 ** 3;
+    const file = newUploadPath(opts.mediaDir ?? "data/uploads", ext);
+    const hash = crypto.createHash("sha256"); let size = 0; let aborted = false;
+    const ws = fs.createWriteStream(file, { mode: 0o600 });
+    req.on("data", (c: Buffer) => { hash.update(c); size += c.length; if (size > max && !aborted) { aborted = true; req.unpipe(ws); ws.destroy(); fs.rmSync(file, { force: true }); res.status(413).json({ error: "Recording is too large (limit 1.5 GB)." }); } });
+    req.on("error", () => { ws.destroy(); fs.rmSync(file, { force: true }); });
+    ws.on("finish", () => {
+      if (aborted) return;
+      const sha256 = hash.digest("hex");
+      const empty = { sourcesAdded: 0, sourcesSkipped: 0, participantsAdded: 0, redaction: { names: 0, phones: 0, emails: 0, places: 0 } };
+      if (!size) { fs.rmSync(file, { force: true }); return res.status(400).json({ error: "empty file" }); }
+      if (db.prepare("SELECT 1 FROM media_hashes WHERE sha256=?").get(sha256)) {
+        fs.rmSync(file, { force: true });
+        return res.json({ status: "processed", message: "Already imported: nothing new to add.", format: "recording", ...empty, sourcesSkipped: 1 });
+      }
+      enqueueTranscription(db, { path: file, sha256, study, product: String(q.product ?? "").slice(0, 80), kind: q.kind === "interview" ? "interview" : "cx_call",
+        date: typeof q.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : null, names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) });
+      res.status(202).json({ status: "queued", format: "recording", message: "Transcription queued. It runs in the background; check the status bar and the Sources tab.", ...empty, jobsQueued: 1 });
+    });
+    req.pipe(ws);
+  });
+
   app.put("/api/admin/upload", express.raw({ type: () => true, limit: "60mb" }), async (req, res) => {
     const q = req.query;
     const study = String(q.study ?? "").trim().slice(0, 120);
@@ -54,6 +90,8 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     res.json({
       counts: db.prepare("SELECT status, COUNT(*) n FROM jobs GROUP BY status").all(),
       recentFailures: db.prepare("SELECT id, kind, source_id AS sourceId, error FROM jobs WHERE status='failed' ORDER BY id DESC LIMIT 20").all(),
+      transcriptions: (db.prepare("SELECT id, status, note, created_at AS createdAt, payload FROM jobs WHERE kind='transcribe' AND status IN ('queued','running') ORDER BY id").all() as { id: number; status: string; note: string; createdAt: string; payload: string }[])
+        .map((j) => ({ id: j.id, status: j.status, note: j.note, createdAt: j.createdAt, study: (JSON.parse(j.payload) as { study: string }).study })),
       aiConfigured: !!opts.ai,
     });
   });
