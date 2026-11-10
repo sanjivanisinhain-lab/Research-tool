@@ -13,14 +13,16 @@ const num = (v: string | undefined, d: number) => { const n = Number(v); return 
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const production = env["NODE_ENV"] === "production";
   const dataDir = env["DATA_DIR"] ?? "data";
+  const host = env["HOST"] ?? "127.0.0.1";
+  const localOnly = ["127.0.0.1", "localhost", "::1"].includes(host) && env["TRUST_PROXY"] !== "1"; // only this computer can reach it, over plain http
   return {
-    production, port: num(env["PORT"], 8787), host: env["HOST"] ?? "127.0.0.1", dataDir,
+    production, port: num(env["PORT"], 8787), host, dataDir,
     dbPath: env["DB_PATH"] ?? path.join(dataDir, "research.sqlite"),
     termsPath: env["REDACTION_TERMS_PATH"] ?? path.join(dataDir, "redaction-terms.json"),
     mediaDir: env["MEDIA_DIR"] ?? path.join(dataDir, "uploads"),
     assetsDir: env["ASSETS_DIR"] ?? path.join(dataDir, "assessments"),
     staticDir: env["STATIC_DIR"] ?? (production ? "dist/client" : undefined),
-    cookieSecure: env["COOKIE_SECURE"] !== undefined ? env["COOKIE_SECURE"] === "1" : production, // secure cookies by default in production (needs https)
+    cookieSecure: env["COOKIE_SECURE"] !== undefined ? env["COOKIE_SECURE"] === "1" : production && !localOnly, // secure cookies by default when others can reach it (needs https); a local-only run is plain http
     trustProxy: env["TRUST_PROXY"] === "1",
     allowedEmailDomains: (env["ALLOWED_EMAIL_DOMAINS"] ?? "").split(",").map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean),
     setupCode: env["ADMIN_SETUP_CODE"] || undefined,
