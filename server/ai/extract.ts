@@ -1,8 +1,8 @@
 import { audit, type Db } from "../db";
 import type { AiProvider } from "./provider";
 
-export const PROMPT_VERSION = "extract-v1";
-const MAX_CHUNK_CHARS = 6000;
+export const PROMPT_VERSION = "extract-v2";
+const MAX_CHUNK_CHARS = 3500;
 
 type Utt = { id: number; speaker: string; text: string };
 export type Finding = {
@@ -21,7 +21,8 @@ Rules:
 - translation: a faithful English rendering of the quote (it is NOT verbatim).
 - Placeholders like [NAME], [CITY], [PHONE] are redactions; keep them as is.
 - Some transcripts are noisy machine transcriptions with unreliable speaker labels. If you cannot tell the participant from the interviewer, set speaker_uncertain=true.
-- Prefer fewer, high-quality findings over many weak ones.`;
+- From researcher notes, ALSO extract concrete reported behaviours and outcomes (kept/returned/cancelled the order, payment mode and why, stopped ordering, switched or compared apps, did not complain and why, how they discover products). Use a contiguous sentence or phrase from the note as the quote, kind="did".
+- Aim for roughly 3-8 findings per call note or per 3,000 characters of transcript, each about a different point. Skip filler, greetings and anything not about shopping or the platform.`;
 
 const SCHEMA = {
   type: "OBJECT",
