@@ -15,10 +15,13 @@ function seed() {
   }
   return db;
 }
-const responder = (req: any) => req.system.includes("SEGMENTS")
-  ? { segments: [{ name: "COD users", characteristic: "pay cash", participants: ["P001", "P002", "P003", "PXXX"] }, { name: "tiny", characteristic: "x", participants: ["P001"] }],
-      personas: [{ name: "Cash Cautious", description: "d", participants: ["P001", "P002", "P003"] }] }
-  : { traits: [{ type: "trust_barrier", text: "supported", evidence_ids: [1, 2, 999] }, { type: "need", text: "invented", evidence_ids: [999] }, { type: "gap", text: "unknown X", evidence_ids: [] }] };
+const responder = (req: any) => req.system.includes("define user SEGMENTS")
+  ? { segments: [{ name: "COD users", characteristic: "pay cash" }, { name: "tiny", characteristic: "x" }], personas: [{ name: "Cash Cautious", description: "d" }] }
+  : req.system.includes("Assign each participant")
+    ? { assignments: [
+        { participant_id: "P001", segments: ["COD users", "tiny"], personas: ["Cash Cautious"] }, { participant_id: "P002", segments: ["COD users"], personas: ["Cash Cautious"] },
+        { participant_id: "P003", segments: ["COD users"], personas: ["Cash Cautious", "Unknown persona"] }, { participant_id: "PXXX", segments: ["COD users"], personas: ["Cash Cautious"] } ] }
+    : { traits: [{ type: "trust_barrier", text: "supported", evidence_ids: [1, 2, 999] }, { type: "need", text: "invented", evidence_ids: [999] }, { type: "gap", text: "unknown X", evidence_ids: [] }] };
 
 describe("synthesis", () => {
   it("uses approved evidence only, drops fake ids/unsupported traits, ignores small clusters", async () => {

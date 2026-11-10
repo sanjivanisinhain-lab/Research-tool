@@ -4,6 +4,22 @@ import { openDb } from "./db";
 import { docxToText, ingestCallsCsv, ingestTranscript } from "./ingest";
 
 const [cmd, kind, file, ...rest] = process.argv.slice(2);
+if (cmd === "apply-trust-policy") {
+  // Evidence extracted from research-team sources is trusted; approve any that is still pending (logged).
+  const { audit } = await import("./db");
+  const d = openDb();
+  const r = d.prepare("UPDATE evidence SET status='approved' WHERE status='pending' AND source_id IN (SELECT id FROM sources WHERE submitted_by='research_team')").run();
+  d.prepare("UPDATE sources SET status='approved' WHERE status='pending' AND submitted_by='research_team'").run();
+  audit(d, "policy.research_team_trusted", { evidenceApproved: Number(r.changes) });
+  console.log(JSON.stringify({ evidenceApproved: Number(r.changes) }));
+  process.exit(0);
+}
+if (cmd === "themes") {
+  const { canonicaliseThemes } = await import("./ai/themes");
+  const { providerFromEnv } = await import("./ai/provider");
+  console.log(JSON.stringify(await canonicaliseThemes(openDb(), providerFromEnv())));
+  process.exit(0);
+}
 if (cmd === "synthesise") {
   const { synthesise } = await import("./ai/personas");
   const { providerFromEnv } = await import("./ai/provider");

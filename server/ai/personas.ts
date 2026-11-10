@@ -10,22 +10,26 @@ type TraitOut = { traits: { type: string; text: string; evidence_ids: number[] }
 const TRAIT_TYPES = ["behaviour", "need", "pain_point", "motivation", "trust_barrier", "job_to_be_done", "trigger", "gap"];
 const hid = (s: string) => crypto.createHash("sha256").update(s).digest("hex").slice(0, 8);
 
-const SYS_CLUSTER = `You synthesise user SEGMENTS and PERSONAS strictly from the research digest given. Never use outside knowledge.
-- Segment = a real group of participants sharing a describable characteristic (e.g. how they pay, lifecycle stage, why they left). Use the metadata and themes.
-- Persona = a behavioural profile (needs, motivations, barriers) shared by a cluster of participants. Name it with a short evocative label (2-4 words). A participant may belong to several personas and several segments.
-- Only list participant IDs that appear in the digest. Each persona/segment needs at least 3 participants. Do not invent demographics.
-- Propose 3-6 segments and 3-6 personas.`;
 const SYS_TRAITS = `You write evidence-backed traits for ONE persona. Use ONLY the numbered evidence given.
 - Each trait: type (behaviour, need, pain_point, motivation, trust_barrier, job_to_be_done, trigger, gap), one plain sentence, and evidence_ids drawn ONLY from the list given (at least 2 ids from different participants where possible).
 - Do not state anything the evidence does not support. Use type "gap" for important things the evidence does NOT tell us.
 - 8-14 traits total, covering several types.`;
 
-const idArr = { type: "ARRAY", items: { type: "STRING" } };
-const clusterProps = { name: { type: "STRING" }, description: { type: "STRING" }, participants: idArr };
-const SCHEMA_CLUSTER = { type: "OBJECT", properties: {
-  segments: { type: "ARRAY", items: { type: "OBJECT", properties: { ...clusterProps, characteristic: { type: "STRING" } }, required: ["name", "characteristic", "participants"] } },
-  personas: { type: "ARRAY", items: { type: "OBJECT", properties: clusterProps, required: ["name", "description", "participants"] } },
+const SYS_DEFINE = `You define user SEGMENTS and PERSONAS strictly from the research digest given. Never use outside knowledge.
+- Segment = a group of participants sharing a describable characteristic (how they pay, lifecycle stage, why they left, how they discover products...). Segments must distinguish some participants from others.
+- Persona = a behavioural profile (needs, motivations, barriers). Name it with a short label (2-4 words).
+- The digest mixes studies (Snapdeal CX calls and fashion-shopping interviews); do not assume one platform. Do not invent demographics.
+- Together the personas must cover most participants in EVERY study listed in the digest: include personas that fit the fashion/Gen Z interview participants as well as the Snapdeal CX callers, and make descriptions general enough to fit several participants.
+- Propose 5-7 segments and 5-7 personas. Give names and descriptions only; membership is assigned separately.`;
+const SYS_ASSIGN = `Assign each participant to the segments and personas they genuinely fit, using ONLY their digest line. A participant may fit several personas and several segments, or none. Use the exact names given. Aim for every participant to fit at least one persona when their digest reasonably supports it, but never stretch: leave a participant out if the digest does not support the fit.`;
+const SCHEMA_DEFINE = { type: "OBJECT", properties: {
+  segments: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, characteristic: { type: "STRING" } }, required: ["name", "characteristic"] } },
+  personas: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, description: { type: "STRING" } }, required: ["name", "description"] } },
 }, required: ["segments", "personas"] };
+const idArr = { type: "ARRAY", items: { type: "STRING" } };
+const SCHEMA_ASSIGN = { type: "OBJECT", properties: { assignments: { type: "ARRAY", items: { type: "OBJECT", properties: { participant_id: { type: "STRING" }, segments: idArr, personas: idArr }, required: ["participant_id", "segments", "personas"] } } }, required: ["assignments"] };
+type Defs = { segments: { name: string; characteristic: string }[]; personas: { name: string; description: string }[] };
+type Assign = { assignments: { participant_id: string; segments: string[]; personas: string[] }[] };
 const SCHEMA_TRAITS = { type: "OBJECT", properties: { traits: { type: "ARRAY", items: { type: "OBJECT", properties: {
   type: { type: "STRING", enum: TRAIT_TYPES }, text: { type: "STRING" }, evidence_ids: { type: "ARRAY", items: { type: "INTEGER" } } }, required: ["type", "text", "evidence_ids"] } } }, required: ["traits"] };
 
@@ -34,7 +38,7 @@ export type SynthResult = { runId: number; segments: number; personas: number; t
 
 export async function synthesise(db: Db, ai: AiProvider, opts: SynthOpts = {}): Promise<SynthResult> {
   const statuses = opts.includePending ? ["approved", "pending"] : ["approved"];
-  const ev = db.prepare(`SELECT id,participant_id,kind,theme,sentiment,translation,original_text,pain_point,need FROM evidence WHERE status IN (${statuses.map(() => "?").join(",")}) ORDER BY id`).all(...statuses) as Ev[];
+  const ev = db.prepare(`SELECT id,participant_id,kind,COALESCE(canonical_theme,theme) AS theme,sentiment,translation,original_text,pain_point,need FROM evidence WHERE status IN (${statuses.map(() => "?").join(",")}) ORDER BY id`).all(...statuses) as Ev[];
   if (!ev.length) throw new Error("No approved evidence to synthesise from. Approve evidence in the review queue first.");
   const byP = new Map<string, Ev[]>();
   for (const e of ev) byP.set(e.participant_id, [...(byP.get(e.participant_id) ?? []), e]);
@@ -47,7 +51,24 @@ export async function synthesise(db: Db, ai: AiProvider, opts: SynthOpts = {}): 
     return `${pid} [${studyOf(pid)}${meta ? " | " + meta : ""}]: ${themes}`;
   }).join("\n");
 
-  const proposal = await ai.generateJson<Proposal>({ system: SYS_CLUSTER, prompt: `Research digest (${byP.size} participants):\n${digest}`, schema: SCHEMA_CLUSTER });
+  const defs = await ai.generateJson<Defs>({ system: SYS_DEFINE, schema: SCHEMA_DEFINE, prompt: `Research digest (${byP.size} participants):\n${digest}` });
+  const segNames = new Set((defs.segments ?? []).map((x) => x.name)), perNames = new Set((defs.personas ?? []).map((x) => x.name));
+  const segMembers = new Map<string, Set<string>>([...segNames].map((n) => [n, new Set<string>()]));
+  const perMembers = new Map<string, Set<string>>([...perNames].map((n) => [n, new Set<string>()]));
+  const lines = digest.split("\n");
+  for (let i = 0; i < lines.length; i += 20) {
+    const out = await ai.generateJson<Assign>({ system: SYS_ASSIGN, schema: SCHEMA_ASSIGN,
+      prompt: `Segments:\n${defs.segments.map((x) => `- ${x.name}: ${x.characteristic}`).join("\n")}\n\nPersonas:\n${defs.personas.map((x) => `- ${x.name}: ${x.description}`).join("\n")}\n\nParticipants:\n${lines.slice(i, i + 20).join("\n")}` });
+    for (const a of out.assignments ?? []) {
+      if (!byP.has(a.participant_id)) continue; // ignore invented participant ids
+      for (const n of a.segments ?? []) segMembers.get(n)?.add(a.participant_id);
+      for (const n of a.personas ?? []) perMembers.get(n)?.add(a.participant_id);
+    }
+  }
+  const proposal = {
+    segments: defs.segments.map((x) => ({ name: x.name, characteristic: x.characteristic, description: x.characteristic, participants: [...(segMembers.get(x.name) ?? [])] })),
+    personas: defs.personas.map((x) => ({ name: x.name, description: x.description, participants: [...(perMembers.get(x.name) ?? [])] })),
+  };
   const min = opts.minMembers ?? 3;
   const valid = (c: Cluster) => [...new Set(c.participants)].filter((p) => byP.has(p));
   const run = db.prepare("INSERT INTO synthesis_runs(created_at,model,includes_unreviewed,evidence_count,participant_count) VALUES (?,?,?,?,?)")
@@ -56,7 +77,8 @@ export async function synthesise(db: Db, ai: AiProvider, opts: SynthOpts = {}): 
   let nSeg = 0, nPer = 0, kept = 0, dropped = 0;
 
   for (const s of proposal.segments ?? []) {
-    const members = valid(s); if (members.length < min) continue;
+    const members = valid(s);
+    if (members.length < min || (byP.size >= 10 && members.length > 0.85 * byP.size)) continue; // a segment of (nearly) everyone says nothing
     const id = `SEG-${hid(runId + s.name)}`;
     db.prepare("INSERT INTO segments(id,run_id,name,characteristic) VALUES (?,?,?,?)").run(id, runId, s.name, s.characteristic);
     for (const p of members) db.prepare("INSERT OR IGNORE INTO segment_participants VALUES (?,?)").run(id, p);
