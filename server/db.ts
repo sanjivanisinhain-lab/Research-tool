@@ -63,6 +63,7 @@ export function openDb(file = process.env.DB_PATH ?? "data/research.sqlite"): Db
   db.exec(SCHEMA_V7);
   db.exec(SCHEMA_V8);
   migrateV9(db);
+  db.exec(SCHEMA_V10);
   return db;
 }
 
@@ -206,6 +207,22 @@ CREATE TABLE IF NOT EXISTS study_requests (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_study_requests_status ON study_requests(status);
+`;
+
+export const SCHEMA_V10 = `
+CREATE TABLE IF NOT EXISTS persona_messages (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  persona_id TEXT NOT NULL,
+  persona_name TEXT NOT NULL,           -- lets a conversation survive an audience rebuild (ids change, names often don't)
+  sender TEXT NOT NULL CHECK (sender IN ('user','persona')),
+  text TEXT NOT NULL,
+  label TEXT CHECK (label IN ('evidence','inference','no_evidence')),
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  suggested_study TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_persona_messages ON persona_messages(user_id, persona_name, created_at);
 `;
 
 export function migrateV4(db: Db) {

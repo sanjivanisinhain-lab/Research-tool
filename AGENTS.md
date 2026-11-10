@@ -10,7 +10,7 @@
 <!-- LOVABLE:END -->
 
 - Keep all research reads and mutations behind the typed `src/api` client; only the mock implementation imports fixtures so a future HTTP backend can replace it.
-- Keep deterministic persona response selection in `src/api/personaReplies.ts`; it uses supplied research patterns, never AI or web calls.
+- Keep deterministic persona response selection in `src/api/personaReplies.ts` (demo/mock only); it uses supplied research patterns, never AI or web calls. The real backend writes persona replies with the AI in `server/ai/personaChat.ts`, restricted to retrieved evidence, with citations verified and unsupported claims downgraded.
 - Use the shared API-backed PersonaChips control across audience-selection views so persona labels do not diverge.
 - Source context is returned with evidence through the typed API, not fabricated in presentation components.
 - Mock/fixture confidence scores stay illustrative (`methodStatus: "illustrative"`); never present them as computed. The real backend computes confidence deterministically in `server/confidence.ts` (v1, approved by the product owner; `methodStatus: "computed_v1"`); the AI only labels evidence, never produces the numbers.

@@ -24,7 +24,9 @@ function PersonaChat() {
   const { persona } = Route.useSearch();
   const audiences = useAudiences();
   const personas = audiences.data?.filter((a) => a.ref.kind === "persona") ?? [];
-  const [pid, setPid] = useState(persona ?? "deal-driven");
+  const [chosen, setPid] = useState(persona ?? "deal-driven");
+  // fall back to the first persona when the chosen one doesn't exist (e.g. after audiences were rebuilt)
+  const pid = personas.some((p) => p.ref.id === chosen) ? chosen : (personas[0]?.ref.id ?? chosen);
   const current = personas.find((p) => p.ref.id === pid)?.ref;
   const q = usePersonaConversation(pid);
   const qc = useQueryClient();
@@ -73,6 +75,7 @@ function PersonaChat() {
               <textarea id="pmsg" rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(text); } }} placeholder={`Ask ${current.name}…`} className="min-h-10 flex-1 resize-none bg-transparent py-2 outline-none" />
               <Button size="icon" className="rounded-xl" disabled={!text.trim() || send.isPending} onClick={() => go(text)} aria-label="Send"><ArrowUp className="size-4" /></Button>
             </div>
+            {send.isError && <p role="alert" className="mt-2 text-sm text-risk">{(send.error as Error).message}</p>}
           </div>
         </div>
       </div>

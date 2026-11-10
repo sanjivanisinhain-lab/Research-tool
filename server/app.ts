@@ -12,6 +12,7 @@ import path from "node:path";
 import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import { assessDesign } from "./ai/assess";
+import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
@@ -303,7 +304,11 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       status: r.variant === "insufficient" ? "Insufficient evidence" : r.variant === "script_review" ? "Reviewed" : r.variant === "study_plan" ? "Study plan" : "Answered", updatedAt: r.c, target: { to: "/ask/$id", id: r.id } }));
     const assessments = (db.prepare("SELECT id,task,audience_json a,created_at c,assessment_json j FROM assessments WHERE user_id=? ORDER BY created_at DESC LIMIT 100").all(req.user!.id) as any[]).map((r) => ({
       id: r.id, title: (JSON.parse(r.j).title as string) || r.task.slice(0, 90), type: "assessment", audience: names(r.a), status: "Prediction", updatedAt: r.c, target: { to: "/assess/$id", id: r.id } }));
-    res.json([...answers, ...assessments].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).slice(0, 100));
+    const chats = (db.prepare("SELECT persona_name n, MAX(persona_id) pid, COUNT(*) c, MAX(created_at) t FROM persona_messages WHERE user_id=? GROUP BY persona_name").all(req.user!.id) as any[]).map((r) => {
+      const current = db.prepare("SELECT id FROM personas WHERE name=? ORDER BY rowid DESC LIMIT 1").get(r.n) as { id: string } | undefined; // follow the persona across audience rebuilds
+      return { id: `chat-${r.n}`, title: `Conversation with ${r.n}`, type: "persona_chat", audience: r.n, status: `${Math.ceil(r.c / 2)} question${Math.ceil(r.c / 2) === 1 ? "" : "s"}`, updatedAt: r.t, target: { to: "/persona-chat", persona: current?.id ?? r.pid } };
+    });
+    res.json([...answers, ...assessments, ...chats].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).slice(0, 100));
   });
 
   app.post("/api/answers/:id/follow-ups", async (req, res) => {
@@ -344,8 +349,20 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const r = db.prepare("SELECT assessment_json j, user_id u FROM assessments WHERE id=?").get(req.params.id) as { j: string; u: string | null } | undefined;
     return r && canSee(req, r.u) ? res.type("json").send(r.j) : res.status(404).end();
   });
-  for (const p of ["/api/personas/:id/messages"]) app.post(p, (_req, res) => res.status(501).json({ error: "not implemented yet" }));
-  app.get("/api/personas/:id/conversation", (_req, res) => res.json([]));
+  // ---------- Persona chat: talk to a research-derived persona (a simulation, always grounded and labelled) ----------
+  app.get("/api/personas/:id/conversation", (req, res) => {
+    const persona = latestPersona(db, req.params.id);
+    return persona ? res.json(conversation(db, req.user!.id, persona)) : res.status(404).end();
+  });
+  app.post("/api/personas/:id/messages", async (req, res) => {
+    const text = req.body?.text;
+    if (typeof text !== "string" || !text.trim() || text.length > 2000) return res.status(400).json({ error: "message required" });
+    const persona = latestPersona(db, req.params.id);
+    if (!persona) return res.status(404).json({ error: "persona not found" });
+    if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
+    try { res.json(await chatWithPersona(db, opts.ai, { userId: req.user!.id, persona, text: text.trim(), ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}) })); }
+    catch (e) { console.error("persona chat failed:", (e as Error).message); res.status(502).json({ error: "the persona could not reply" }); }
+  });
 
   return app;
 }
