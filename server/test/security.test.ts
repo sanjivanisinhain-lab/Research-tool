@@ -85,7 +85,9 @@ describe("limits and error handling", () => {
 
 describe("configuration and secrets", () => {
   it("production defaults: secure cookies on, static app served; development: off", () => {
-    expect(loadConfig({ NODE_ENV: "production" })).toMatchObject({ cookieSecure: true, staticDir: "dist/client", host: "127.0.0.1" });
+    expect(loadConfig({ NODE_ENV: "production", HOST: "0.0.0.0" })).toMatchObject({ cookieSecure: true, staticDir: "dist/client" });
+    expect(loadConfig({ NODE_ENV: "production", TRUST_PROXY: "1" }).cookieSecure).toBe(true); // behind an https proxy
+    expect(loadConfig({ NODE_ENV: "production" })).toMatchObject({ cookieSecure: false, host: "127.0.0.1" }); // local-only, plain http: sign-in must stick
     expect(loadConfig({ NODE_ENV: "production", COOKIE_SECURE: "0" }).cookieSecure).toBe(false);
     expect(loadConfig({})).toMatchObject({ cookieSecure: false, staticDir: undefined, dbPath: path.join("data", "research.sqlite") });
     expect(loadConfig({ DATA_DIR: "/srv/rh" }).mediaDir).toBe(path.join("/srv/rh", "uploads"));
