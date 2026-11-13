@@ -43,6 +43,8 @@ See `.env.example` (every setting is explained there) and `docs/AUTH.md`. The on
 | `COOKIE_SECURE=1` + https | Keeps sign-in cookies from travelling in the clear. |
 | `TRUST_PROXY=1` | Needed behind a proxy so sign-in throttling sees real client addresses. |
 | `FIGMA_TOKEN` | Optional. A read-only Figma personal access token so Assess can open Figma links. Share the Figma file with the token's account. |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` (or `GOOGLE_SERVICE_ACCOUNT_JSON`) | Optional. The key of a Google service account that may read your call-notes sheet. See `docs/SHEETS.md`. |
+| `SHEET_SYNC_MINUTES` | How often linked sheets are checked. Default 10. |
 | `BACKUP_PASSPHRASE` | Encrypts backups (they contain password hashes and the list of removed names). |
 
 ## Backups and restore

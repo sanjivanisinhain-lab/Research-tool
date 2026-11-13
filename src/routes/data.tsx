@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, FileUp, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { Check, FileUp, Loader2, RefreshCw, ShieldCheck, Table2, X } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { adminApi, AdminForbiddenError, type AdminSource, type Redaction, type StudyRequestItem, type TeamUser, type UploadResult } from "@/api/admin";
+import { adminApi, AdminForbiddenError, type SheetLinkInfo, type AdminSource, type Redaction, type StudyRequestItem, type TeamUser, type UploadResult } from "@/api/admin";
 import { EmptyState, ErrorState, LoadingBlock, PageHeader, StatusBadge, relativeTime } from "@/components/research/primitives";
 import { cn } from "@/lib/utils";
 import { authApi } from "@/api/auth";
@@ -35,6 +36,7 @@ function DataPage() {
         <TabsList className="rounded-full">
           <TabsTrigger value="upload" className="rounded-full">Upload</TabsTrigger>
           <TabsTrigger value="sources" className="rounded-full">Sources</TabsTrigger>
+          <TabsTrigger value="sheets" className="rounded-full">Google Sheets</TabsTrigger>
           <TabsTrigger value="review" className="rounded-full">Review queue</TabsTrigger>
           <RequestsTrigger />
           <TabsTrigger value="team" className="rounded-full">Team</TabsTrigger>
@@ -42,11 +44,86 @@ function DataPage() {
         </TabsList>
         <TabsContent value="upload"><UploadTab /></TabsContent>
         <TabsContent value="sources"><SourcesTab /></TabsContent>
+        <TabsContent value="sheets"><SheetsTab /></TabsContent>
         <TabsContent value="review"><ReviewTab /></TabsContent>
         <TabsContent value="requests"><RequestsTab /></TabsContent>
         <TabsContent value="team"><TeamTab /></TabsContent>
         <TabsContent value="note"><NoteTab /></TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function SheetsTab() {
+  const qc = useQueryClient();
+  const info = useQuery({ queryKey: ["admin", "sheets"], queryFn: adminApi.sheets, refetchInterval: 15000 });
+  const [form, setForm] = useState({ url: "", name: "", study: "", product: "Snapdeal" });
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const refresh = () => qc.invalidateQueries({ queryKey: ["admin"] });
+  const link = useMutation({
+    mutationFn: () => adminApi.linkSheet(form),
+    onSuccess: (r) => { setMsg({ ok: r.sync.ok, text: r.sync.message }); setForm({ url: "", name: "", study: "", product: form.product }); refresh(); },
+    onError: (e: Error) => setMsg({ ok: false, text: e.message }),
+  });
+  const sync = useMutation({
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) => adminApi.syncSheet(id, force),
+    onSuccess: (r) => { setMsg({ ok: r.ok, text: r.message }); refresh(); },
+    onError: (e: Error) => setMsg({ ok: false, text: e.message }),
+  });
+  const toggle = useMutation({ mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => adminApi.setSheetEnabled(id, enabled), onSuccess: refresh });
+  if (info.isLoading) return <LoadingBlock rows={3} />;
+  if (info.isError || !info.data) return <ErrorState onRetry={() => info.refetch()} />;
+  const d = info.data;
+  return (
+    <div className="mt-6 space-y-6">
+      <section className="rounded-2xl border bg-card p-6">
+        <h2 className="text-lg font-semibold">Keep a Google Sheet up to date automatically</h2>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Link the sheet where you keep call notes. The tool checks it every few minutes: new rows are added, edited rows are read again, and removed rows are flagged. A redacted copy is kept so anyone can open the exact row an insight came from. Names, numbers and cities never appear in it.</p>
+        {!d.configured ? (
+          <div className="mt-4 rounded-xl border border-dashed p-4 text-sm">
+            <p className="font-medium">One-time setup is needed on the server.</p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
+              <li>In Google Cloud, create a project and turn on the Google Sheets API.</li>
+              <li>Create a service account and download its JSON key.</li>
+              <li>Start the server with <code>GOOGLE_SERVICE_ACCOUNT_FILE</code> set to the path of that file.</li>
+              <li>Return here. This page will show the account's email address to share your sheet with.</li>
+            </ol>
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <p className="rounded-xl bg-secondary p-3 text-sm">Share your Google Sheet with <strong className="break-all">{d.serviceAccountEmail}</strong> as a <strong>Viewer</strong>, then paste the sheet's link below.</p>
+            <form className="grid gap-3 md:grid-cols-2" onSubmit={(e) => { e.preventDefault(); setMsg(null); link.mutate(); }}>
+              <Label text="Google Sheet link"><input id="sheet-url" className={field} inputMode="url" placeholder="https://docs.google.com/spreadsheets/d/…" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} /></Label>
+              <Label text="Name" hint="Optional. Defaults to the sheet's title."><input id="sheet-name" className={field} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Label>
+              <Label text="Study name" hint="Optional. Groups these calls with a study."><input id="sheet-study" className={field} value={form.study} onChange={(e) => setForm({ ...form, study: e.target.value })} /></Label>
+              <Label text="Product"><input id="sheet-product" className={field} value={form.product} onChange={(e) => setForm({ ...form, product: e.target.value })} /></Label>
+              <div className="md:col-span-2"><Button type="submit" className="rounded-full" disabled={!form.url.trim() || link.isPending}>{link.isPending ? <><Loader2 className="animate-spin" />Linking and reading…</> : "Link sheet"}</Button></div>
+            </form>
+          </div>
+        )}
+        {msg && <p role="status" className={cn("mt-3 text-sm", msg.ok ? "text-strong" : "text-risk")}>{msg.text}</p>}
+      </section>
+      {d.links.length > 0 && (
+        <ul className="space-y-3">
+          {d.links.map((l: SheetLinkInfo) => (
+            <li key={l.id} className="rounded-2xl border bg-card p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-2 font-semibold"><Table2 className="size-4 shrink-0" /><span className="truncate">{l.name}</span>{!l.enabled && <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-normal">Paused</span>}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{l.rows} row{l.rows === 1 ? "" : "s"}{l.removedRows ? ` · ${l.removedRows} removed from the sheet` : ""} · {l.lastSyncedAt ? `last read ${relativeTime(l.lastSyncedAt)}` : "not read yet"}</p>
+                  {l.lastMessage && <p className={cn("mt-1 text-sm", l.lastStatus === "ok" ? "text-muted-foreground" : l.lastStatus === "needs_confirmation" ? "text-mixed" : "text-risk")}>{l.lastMessage}</p>}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {l.lastStatus === "needs_confirmation" && <Button className="rounded-full" disabled={sync.isPending} onClick={() => sync.mutate({ id: l.id, force: true })}>Apply anyway</Button>}
+                  <Button variant="outline" className="rounded-full" disabled={sync.isPending} onClick={() => sync.mutate({ id: l.id })}><RefreshCw className={cn(sync.isPending && "animate-spin")} />Read now</Button>
+                  <Button variant="outline" className="rounded-full" onClick={() => toggle.mutate({ id: l.id, enabled: !l.enabled })}>{l.enabled ? "Pause" : "Resume"}</Button>
+                  {l.tabs.length > 0 && <Button asChild variant="outline" className="rounded-full"><Link to="/sheets/$id" params={{ id: l.id }} search={{ tab: l.tabs[0]!.title }}>View</Link></Button>}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -20,6 +20,7 @@ import { Route as AssessIdRouteImport } from './routes/assess.$id'
 import { Route as AudiencesIndexRouteImport } from './routes/audiences.index'
 import { Route as OnboardingContextRouteImport } from './routes/onboarding.context'
 import { Route as OnboardingRoleRouteImport } from './routes/onboarding.role'
+import { Route as SheetsIdRouteImport } from './routes/sheets.$id'
 import { Route as AudiencesKindIdRouteImport } from './routes/audiences.$kind.$id'
 
 const IndexRoute = IndexRouteImport.update({
@@ -77,6 +78,11 @@ const OnboardingRoleRoute = OnboardingRoleRouteImport.update({
   path: '/onboarding/role',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SheetsIdRoute = SheetsIdRouteImport.update({
+  id: '/sheets/$id',
+  path: '/sheets/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AudiencesKindIdRoute = AudiencesKindIdRouteImport.update({
   id: '/audiences/$kind/$id',
   path: '/audiences/$kind/$id',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/assess/$id': typeof AssessIdRoute
   '/onboarding/context': typeof OnboardingContextRoute
   '/onboarding/role': typeof OnboardingRoleRoute
+  '/sheets/$id': typeof SheetsIdRoute
   '/assess/': typeof AssessIndexRoute
   '/audiences/': typeof AudiencesIndexRoute
   '/audiences/$kind/$id': typeof AudiencesKindIdRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/assess/$id': typeof AssessIdRoute
   '/onboarding/context': typeof OnboardingContextRoute
   '/onboarding/role': typeof OnboardingRoleRoute
+  '/sheets/$id': typeof SheetsIdRoute
   '/assess': typeof AssessIndexRoute
   '/audiences': typeof AudiencesIndexRoute
   '/audiences/$kind/$id': typeof AudiencesKindIdRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/assess/$id': typeof AssessIdRoute
   '/onboarding/context': typeof OnboardingContextRoute
   '/onboarding/role': typeof OnboardingRoleRoute
+  '/sheets/$id': typeof SheetsIdRoute
   '/assess/': typeof AssessIndexRoute
   '/audiences/': typeof AudiencesIndexRoute
   '/audiences/$kind/$id': typeof AudiencesKindIdRoute
@@ -138,6 +147,7 @@ export interface FileRouteTypes {
     | '/assess/$id'
     | '/onboarding/context'
     | '/onboarding/role'
+    | '/sheets/$id'
     | '/assess/'
     | '/audiences/'
     | '/audiences/$kind/$id'
@@ -152,6 +162,7 @@ export interface FileRouteTypes {
     | '/assess/$id'
     | '/onboarding/context'
     | '/onboarding/role'
+    | '/sheets/$id'
     | '/assess'
     | '/audiences'
     | '/audiences/$kind/$id'
@@ -166,6 +177,7 @@ export interface FileRouteTypes {
     | '/assess/$id'
     | '/onboarding/context'
     | '/onboarding/role'
+    | '/sheets/$id'
     | '/assess/'
     | '/audiences/'
     | '/audiences/$kind/$id'
@@ -181,6 +193,7 @@ export interface RootRouteChildren {
   AssessIdRoute: typeof AssessIdRoute
   OnboardingContextRoute: typeof OnboardingContextRoute
   OnboardingRoleRoute: typeof OnboardingRoleRoute
+  SheetsIdRoute: typeof SheetsIdRoute
   AssessIndexRoute: typeof AssessIndexRoute
   AudiencesIndexRoute: typeof AudiencesIndexRoute
   AudiencesKindIdRoute: typeof AudiencesKindIdRoute
@@ -265,6 +278,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OnboardingRoleRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sheets/$id': {
+      id: '/sheets/$id'
+      path: '/sheets/$id'
+      fullPath: '/sheets/$id'
+      preLoaderRoute: typeof SheetsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/audiences/$kind/$id': {
       id: '/audiences/$kind/$id'
       path: '/audiences/$kind/$id'
@@ -285,6 +305,7 @@ const rootRouteChildren: RootRouteChildren = {
   AssessIdRoute: AssessIdRoute,
   OnboardingContextRoute: OnboardingContextRoute,
   OnboardingRoleRoute: OnboardingRoleRoute,
+  SheetsIdRoute: SheetsIdRoute,
   AssessIndexRoute: AssessIndexRoute,
   AudiencesIndexRoute: AudiencesIndexRoute,
   AudiencesKindIdRoute: AudiencesKindIdRoute,

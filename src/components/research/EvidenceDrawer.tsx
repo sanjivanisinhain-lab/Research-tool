@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ExternalLink, Table2 } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import type { EvidenceItem } from "@/types/research";
 import { Button } from "@/components/ui/button";
@@ -93,7 +94,7 @@ function EvidenceDrawer({ ids, isOpen, onClose, tab, setTab }: { ids: string[]; 
                   <ExternalLink className="size-3.5" /> {expandedSource === e.id ? "Close source" : "Open source"}
                 </Button>
               </div>
-              {expandedSource === e.id && <SourceContext evidence={e} />}
+              {expandedSource === e.id && <SourceContext evidence={e} onNavigate={onClose} />}
             </article>
           ))}
         </div>
@@ -102,7 +103,7 @@ function EvidenceDrawer({ ids, isOpen, onClose, tab, setTab }: { ids: string[]; 
   );
 }
 
-function SourceContext({ evidence: e }: { evidence: EvidenceItem }) {
+function SourceContext({ evidence: e, onNavigate }: { evidence: EvidenceItem; onNavigate: () => void }) {
   const source = e.sourceContext;
   if (!source) return <p className="mt-4 text-sm text-muted-foreground">Source context unavailable.</p>;
   return <section id={`source-${e.id}`} className="mt-4 border-t pt-4" aria-label={source.simulated ? "Simulated source context" : "Source context"}>
@@ -112,6 +113,14 @@ function SourceContext({ evidence: e }: { evidence: EvidenceItem }) {
     <p className="mt-4 text-sm text-muted-foreground">{source.context}</p>
     <blockquote className="mt-3 border-l-2 border-brand pl-3 text-sm">{e.quote}</blockquote>
     {e.audio && <CxAudioPlayer evidence={e} />}
+    {e.sheet && (
+      <p className="mt-3 text-sm">
+        <Link to="/sheets/$id" onClick={onNavigate} params={{ id: e.sheet.linkId }} search={{ tab: e.sheet.tab, row: e.sheet.row }} className="inline-flex items-center gap-1.5 font-medium text-brand underline">
+          <Table2 className="size-4" />View row {e.sheet.row} in {e.sheet.name}
+        </Link>
+        {e.sheet.removed && <span className="ml-2 text-xs text-risk">This row was later removed from the sheet.</span>}
+      </p>
+    )}
     <p className="mt-3 text-xs text-muted-foreground">{source.simulated ? "Demo context only; not an original transcript or real recording. " : "Names, numbers and cities were removed before storage. "}Translations are shown separately from original wording.</p>
   </section>;
 }
