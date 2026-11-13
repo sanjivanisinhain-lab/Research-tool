@@ -4,7 +4,7 @@ export type Config = {
   production: boolean; port: number; host: string; dataDir: string;
   dbPath: string; termsPath: string; mediaDir: string; assetsDir: string; staticDir: string | undefined;
   cookieSecure: boolean; trustProxy: boolean; allowedEmailDomains: string[]; setupCode: string | undefined;
-  rateAiPerHour: number; rateNotesPerHour: number; includeUnreviewed: boolean; hasGeminiKey: boolean; figmaToken: string | undefined;
+  rateAiPerHour: number; rateNotesPerHour: number; includeUnreviewed: boolean; hasGeminiKey: boolean; figmaToken: string | undefined; sheetSyncMinutes: number;
 };
 
 const num = (v: string | undefined, d: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
@@ -27,7 +27,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     allowedEmailDomains: (env["ALLOWED_EMAIL_DOMAINS"] ?? "").split(",").map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean),
     setupCode: env["ADMIN_SETUP_CODE"] || undefined,
     rateAiPerHour: num(env["RATE_AI_PER_HOUR"], 60), rateNotesPerHour: num(env["RATE_NOTES_PER_HOUR"], 20),
-    includeUnreviewed: env["ALLOW_UNREVIEWED"] === "1", hasGeminiKey: !!env["GEMINI_API_KEY"], figmaToken: env["FIGMA_TOKEN"] || undefined,
+    includeUnreviewed: env["ALLOW_UNREVIEWED"] === "1", hasGeminiKey: !!env["GEMINI_API_KEY"], figmaToken: env["FIGMA_TOKEN"] || undefined, sheetSyncMinutes: num(env["SHEET_SYNC_MINUTES"], 10),
   };
 }
 

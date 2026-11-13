@@ -36,7 +36,7 @@ export function detectLanguage(text: string): Language {
   return hits / words > 0.04 ? "hinglish" : "en";
 }
 
-function ensureStudy(db: Db, name: string, product: string): string {
+export function ensureStudy(db: Db, name: string, product: string): string {
   const id = "S-" + sha(name).slice(0, 8);
   db.prepare("INSERT OR IGNORE INTO studies(id,name,product,created_at) VALUES (?,?,?,?)").run(id, name, product, now());
   return id;
@@ -78,6 +78,25 @@ function addUtterances(db: Db, sourceId: string, participantId: string | null, t
 export const CALL_COLUMNS: Record<string, string> = Object.fromEntries(
   ["Name", "City", "Mobile Number", "Product Name", "Date", "Status", "Notes", "Type of user", "Payment type", "Call duration"].map((c) => [c.toLowerCase(), c]));
 
+/** One CX call-notes row (columns named as in CALL_COLUMNS). Returns the existing source if the same note was imported before. */
+export function ingestCallRow(db: Db, studyId: string, redact: ReturnType<typeof makeRedactor>, r: Record<string, string>, submittedBy: SubmittedBy): { sourceId: string; participantId: string | null; counts: RedactionCounts; existing: boolean } | null {
+  const red = redact(r["Notes"] ?? "");
+  const product = redact(r["Product Name"] ?? "").text;
+  const date = parseDmy(r["Date"] ?? "");
+  const key = sha(`calls|${date}|${product}|${red.text}`);
+  const dup = db.prepare("SELECT id, participant_id p FROM sources WHERE external_key=?").get(key) as { id: string; p: string | null } | undefined;
+  if (dup) return { sourceId: dup.id, participantId: dup.p, counts: zeroCounts(), existing: true };
+  const meta: Record<string, string> = {};
+  for (const [k, v] of [["user_type", r["Type of user"]], ["payment_type", r["Payment type"]], ["call_status", r["Status"]], ["call_duration", r["Call duration"]], ["product", product]] as const) {
+    if (v && v.trim()) meta[k] = v.trim();
+  }
+  const pid = addParticipant(db, studyId, meta);
+  const sid = addSource(db, { studyId, participantId: pid, type: "cx_call", origin: "researcher_notes", title: `CX call notes · ${product.slice(0, 60)}`, date, lang: detectLanguage(red.text), key, counts: red.counts, submittedBy });
+  if (!sid) return null;
+  addUtterances(db, sid, pid, red.text.split(/\n+/).map((t) => t.trim()).filter(Boolean).map((text) => ({ speaker: "note", text })));
+  return { sourceId: sid, participantId: pid, counts: red.counts, existing: false };
+}
+
 /** CX call-notes spreadsheet export (CSV). Names, numbers and cities are removed before storage. */
 export function ingestCallsCsv(db: Db, csv: string, opts: { studyName: string; product: string; termsPath?: string; submittedBy?: SubmittedBy }): IngestResult {
   const parsed = Papa.parse<Record<string, string>>(csv, { header: true, skipEmptyLines: true, transformHeader: (h) => CALL_COLUMNS[h.trim().toLowerCase()] ?? h.trim() });
@@ -94,22 +113,10 @@ export function ingestCallsCsv(db: Db, csv: string, opts: { studyName: string; p
   db.exec("BEGIN");
   try {
     for (const r of rows) {
-      const red = redact(r["Notes"]);
-      const product = redact(r["Product Name"] ?? "").text;
-      const date = parseDmy(r["Date"] ?? "");
-      const key = sha(`calls|${date}|${product}|${red.text}`);
-      if (db.prepare("SELECT 1 FROM sources WHERE external_key=?").get(key)) { result.sourcesSkipped++; continue; }
-      const meta: Record<string, string> = {};
-      for (const [k, v] of [["user_type", r["Type of user"]], ["payment_type", r["Payment type"]], ["call_status", r["Status"]], ["call_duration", r["Call duration"]], ["product", product]] as const) {
-        if (v && v.trim()) meta[k] = v.trim();
-      }
-      const pid = addParticipant(db, studyId, meta);
-      const sid = addSource(db, { studyId, participantId: pid, type: "cx_call", origin: "researcher_notes", title: `CX call notes · ${product.slice(0, 60)}`, date, lang: detectLanguage(red.text), key, counts: red.counts, submittedBy: opts.submittedBy ?? "research_team" });
-      if (!sid) { result.sourcesSkipped++; continue; }
-      const paras = red.text.split(/\n+/).map((s) => s.trim()).filter(Boolean);
-      addUtterances(db, sid, pid, paras.map((text) => ({ speaker: "note", text })));
+      const o = ingestCallRow(db, studyId, redact, r, opts.submittedBy ?? "research_team");
+      if (!o || o.existing) { result.sourcesSkipped++; continue; }
       result.sourcesAdded++; result.participantsAdded++;
-      result.redaction = addCounts(result.redaction, red.counts);
+      result.redaction = addCounts(result.redaction, o.counts);
     }
     audit(db, "ingest.calls_csv", { studyId, added: result.sourcesAdded, skipped: result.sourcesSkipped, redaction: result.redaction });
     db.exec("COMMIT");

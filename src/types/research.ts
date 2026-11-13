@@ -22,6 +22,7 @@ export type EvidenceItem = {
   stance: "supports" | "contradicts";
   audio?: { simulated: true; url: string; duration: number; cues: { start: number; end: number; text: string }[] };
   sourceContext?: { simulated: boolean; reference: string; title: string; context: string; recording: string };
+  sheet?: { linkId: string; name: string; tab: string; row: number; removed: boolean }; // where this came from in a linked Google Sheet
 };
 
 export type ConfidenceLabel = "high" | "medium" | "low" | "very_low";

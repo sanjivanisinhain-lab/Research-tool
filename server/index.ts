@@ -2,6 +2,8 @@ import fs from "node:fs";
 import { openDb } from "./db";
 import { createApp } from "./app";
 import { startWorker } from "./jobs";
+import { GoogleSheets, loadGoogleCreds } from "./google";
+import { startSheetSync } from "./sheets";
 import { providerFromEnv } from "./ai/provider";
 import { loadConfig, securityWarnings } from "./config";
 
@@ -15,9 +17,12 @@ try { ai = providerFromEnv(); } catch { /* reported by securityWarnings */ }
 const userCount = (db.prepare("SELECT COUNT(*) n FROM users").get() as { n: number }).n;
 for (const w of securityWarnings(cfg, userCount)) console.warn(`WARNING: ${w}`);
 
+let sheetsClient: GoogleSheets | null = null;
+try { const gc = loadGoogleCreds(process.env); if (gc) sheetsClient = new GoogleSheets(gc); } catch (e) { console.warn(`WARNING: ${(e as Error).message}. Google Sheets sync is off.`); }
 const stopWorker = startWorker(db, ai, 2000, cfg.mediaDir);
+const stopSheets = sheetsClient ? startSheetSync(db, sheetsClient, { minutes: cfg.sheetSyncMinutes, termsPath: cfg.termsPath }) : () => {};
 const app = createApp(db, {
-  ai, includeUnreviewed: cfg.includeUnreviewed, termsPath: cfg.termsPath, mediaDir: cfg.mediaDir, assetsDir: cfg.assetsDir, figmaToken: cfg.figmaToken,
+  ai, includeUnreviewed: cfg.includeUnreviewed, termsPath: cfg.termsPath, mediaDir: cfg.mediaDir, assetsDir: cfg.assetsDir, figmaToken: cfg.figmaToken, ...(sheetsClient ? { googleSheets: sheetsClient } : {}),
   ...(cfg.staticDir ? { staticDir: cfg.staticDir } : {}), limits: { aiPerHour: cfg.rateAiPerHour, notesPerHour: cfg.rateNotesPerHour },
   auth: { allowedEmailDomains: cfg.allowedEmailDomains, ...(cfg.setupCode ? { setupCode: cfg.setupCode } : {}), cookieSecure: cfg.cookieSecure },
 });
@@ -29,7 +34,7 @@ let closing = false;
 function shutdown(signal: string) {
   if (closing) return; closing = true;
   console.log(`${signal}: shutting down`);
-  stopWorker();
+  stopWorker(); stopSheets();
   server.close(() => { try { db.close(); } catch { /* already closed */ } process.exit(0); });
   setTimeout(() => process.exit(0), 10_000).unref();
 }

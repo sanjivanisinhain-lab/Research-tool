@@ -14,12 +14,14 @@ import path from "node:path";
 import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
+import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
+import { createLink, listLinks, sheetRefs, sheetView, syncSheet } from "./sheets";
 import { fetchFigmaFrames, FigmaError, type FigmaFetch } from "./figma";
 import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; staticDir?: string; limits?: { aiPerHour?: number; notesPerHour?: number }; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string; figmaToken?: string; figmaFetch?: FigmaFetch };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; staticDir?: string; limits?: { aiPerHour?: number; notesPerHour?: number }; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string; figmaToken?: string; figmaFetch?: FigmaFetch; googleSheets?: SheetsClient };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
@@ -303,7 +305,9 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     if (!ids.length) return res.json([]);
     const rows = db.prepare(`SELECT e.id,e.participant_id p,e.original_text q,e.translation tr,e.kind,e.provenance prov,s.id sid,s.title stitle,s.origin,s.quality,st.name study,s.source_type st,s.date d,s.original_language l
       FROM evidence e JOIN sources s ON s.id=e.source_id JOIN studies st ON st.id=s.study_id WHERE e.id IN (${ids.map(() => "?").join(",")}) AND e.status IN (${statuses().map(() => "?").join(",")})`).all(...ids, ...statuses()) as any[];
+    const refs = sheetRefs(db, [...new Set(rows.map((r) => r.sid as string))]);
     const out: EvidenceItem[] = rows.map((r) => {
+      const ref = refs.get(r.sid);
       // stance comes from the most recent answer that cited this evidence
       const like = `%"${r.id}":"%`;
       const ans = db.prepare("SELECT j FROM (SELECT answer_json j, created_at c FROM answers WHERE answer_json LIKE ? UNION ALL SELECT assessment_json j, created_at c FROM assessments WHERE assessment_json LIKE ?) ORDER BY c DESC LIMIT 1").get(like, like) as { j: string } | undefined;
@@ -311,7 +315,8 @@ export function createApp(db: Db, opts: AppOpts = {}) {
       return { id: String(r.id), participantId: r.p, sourceType: r.st, date: r.d ?? "", quote: r.q, originalLanguage: r.l, translation: r.tr ?? undefined, kind: r.kind, stance,
         sourceContext: { simulated: false, reference: r.sid, title: r.stitle,
           context: `${r.study} · ${r.prov === "screen_observation" ? "AI description of the screen recording, not the participant's words" : r.origin === "researcher_notes" ? (r.prov === "participant_verbatim" ? "researcher notes (participant words quoted)" : "researcher summary, not a verbatim quote") : "interview transcript"}${r.quality === "noisy_asr" ? " · noisy machine transcription" : r.quality === "asr_gemini" || r.quality === "asr_screen_gemini" ? " · machine transcript" : ""}`,
-          recording: "No recording attached" } };
+          recording: "No recording attached" },
+        ...(ref ? { sheet: { linkId: ref.linkId, name: ref.name, tab: ref.tab, row: ref.row, removed: ref.removed } } : {}) };
     });
     res.json(out);
   });
@@ -393,6 +398,40 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const r = db.prepare("SELECT assessment_json j, user_id u FROM assessments WHERE id=?").get(String(req.params.id)) as { j: string; u: string | null } | undefined;
     return r && canSee(req, r.u) ? res.type("json").send(r.j) : res.status(404).end();
   });
+  // ---------- Linked Google Sheets ----------
+  app.get("/api/admin/sheets", (_req, res) => res.json({ configured: !!opts.googleSheets, serviceAccountEmail: opts.googleSheets?.serviceAccountEmail ?? null, links: listLinks(db) }));
+  app.post("/api/admin/sheets", async (req, res) => {
+    if (!opts.googleSheets) return res.status(422).json({ error: "Google Sheets isn't set up on the server yet. Set GOOGLE_SERVICE_ACCOUNT_JSON (see docs/DEPLOY.md)." });
+    const b = req.body ?? {};
+    try {
+      const sid = typeof b.url === "string" ? parseSheetUrl(b.url) : null;
+      if (!sid) return res.status(422).json({ error: "That doesn't look like a Google Sheets link. Paste the link from the sheet's address bar." });
+      const book = await opts.googleSheets.spreadsheet(sid); // proves the service account can open it before anything is saved
+      const id = createLink(db, { url: String(b.url), name: String(b.name ?? "").trim() || book.title, study: String(b.study ?? "").trim(), product: String(b.product ?? "").trim(), by: req.user!.id });
+      const r = await syncSheet(db, opts.googleSheets, id, { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) });
+      res.json({ id, sync: r });
+    } catch (e) {
+      if (e instanceof GoogleError) return res.status(e.status).json({ error: e.message });
+      console.error("sheet link failed:", (e as Error).message); res.status(502).json({ error: "Couldn't link the sheet" });
+    }
+  });
+  app.post("/api/admin/sheets/:id/sync", async (req, res) => {
+    if (!opts.googleSheets) return res.status(422).json({ error: "Google Sheets isn't set up on the server yet." });
+    if (!db.prepare("SELECT 1 FROM sheet_links WHERE id=?").get(String(req.params.id))) return res.status(404).end();
+    res.json(await syncSheet(db, opts.googleSheets, String(req.params.id), { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}), force: req.body?.force === true }));
+  });
+  app.patch("/api/admin/sheets/:id", (req, res) => {
+    if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "enabled must be true or false" });
+    const r = db.prepare("UPDATE sheet_links SET enabled=? WHERE id=?").run(req.body.enabled ? 1 : 0, String(req.params.id));
+    return r.changes ? res.json({ ok: true }) : res.status(404).end();
+  });
+  // Any signed-in person can open the redacted view that an insight came from.
+  app.get("/api/sheets/:id/view", (req, res) => {
+    const from = Number(req.query["from"] ?? 1), limit = Number(req.query["limit"] ?? 40);
+    const v = sheetView(db, String(req.params.id), { ...(typeof req.query["tab"] === "string" ? { tab: req.query["tab"] } : {}), from: Number.isFinite(from) ? from : 1, limit: Number.isFinite(limit) ? limit : 40 });
+    return v ? res.json(v) : res.status(404).end();
+  });
+
   // ---------- Persona chat: talk to a research-derived persona (a simulation, always grounded and labelled) ----------
   app.get("/api/personas/:id/conversation", (req, res) => {
     const persona = latestPersona(db, String(req.params.id));

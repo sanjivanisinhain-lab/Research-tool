@@ -65,6 +65,7 @@ export function openDb(file = process.env["DB_PATH"] ?? `${process.env["DATA_DIR
   migrateV9(db);
   db.exec(SCHEMA_V10);
   migrateV11(db);
+  db.exec(SCHEMA_V12);
   return db;
 }
 
@@ -224,6 +225,45 @@ CREATE TABLE IF NOT EXISTS persona_messages (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_persona_messages ON persona_messages(user_id, persona_name, created_at);
+`;
+
+/** Google Sheets kept in step with the tool. Only a redacted copy of each row is stored, so the in-tool view never shows names, numbers or cities. */
+export const SCHEMA_V12 = `
+CREATE TABLE IF NOT EXISTS sheet_links (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  spreadsheet_id TEXT NOT NULL UNIQUE,
+  study_name TEXT NOT NULL,
+  product TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_synced_at TEXT,
+  last_status TEXT,                  -- 'ok' | 'error' | 'needs_confirmation'
+  last_message TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sheet_tabs (
+  link_id TEXT NOT NULL REFERENCES sheet_links(id) ON DELETE CASCADE,
+  tab TEXT NOT NULL,
+  gid TEXT,
+  header_json TEXT NOT NULL,         -- column names as written in the sheet (not personal data)
+  header_row INTEGER NOT NULL,
+  PRIMARY KEY (link_id, tab)
+);
+CREATE TABLE IF NOT EXISTS sheet_rows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  link_id TEXT NOT NULL REFERENCES sheet_links(id) ON DELETE CASCADE,
+  tab TEXT NOT NULL,
+  row_number INTEGER NOT NULL,       -- the row's number in the sheet, as people see it
+  content_hash TEXT NOT NULL,        -- of the redacted note, product and date: changes when the row is edited
+  source_id TEXT REFERENCES sources(id),
+  cells_json TEXT NOT NULL,          -- redacted cells, in header order
+  state TEXT NOT NULL DEFAULT 'live' CHECK (state IN ('live','removed')),
+  removed_at TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sheet_rows_pos ON sheet_rows(link_id, tab, row_number);
+CREATE INDEX IF NOT EXISTS idx_sheet_rows_source ON sheet_rows(source_id);
 `;
 
 export function migrateV4(db: Db) {
