@@ -14,11 +14,12 @@ import type { Annotation } from "@/types/research";
 const BASE = import.meta.env["VITE_API_BASE_URL"] ?? "";
 
 // An uploaded design with numbered markers placed from each annotation's box (0-1000 scale: [ymin, xmin, ymax, xmax]).
-function UploadedDesign({ id, annotations, activeId, onSelect }: { id: string; annotations: Annotation[]; activeId: string | null; onSelect: (id: string) => void }) {
+// Numbers follow the list beside it, so with several screens only this screen's markers are drawn but the numbers still match.
+function UploadedDesign({ id, screen, annotations, activeId, onSelect }: { id: string; screen: number; annotations: Annotation[]; activeId: string | null; onSelect: (id: string) => void }) {
   return (
     <div className="relative mx-auto w-fit max-w-full">
-      <img src={`${BASE}/api/assessments/${id}/image`} alt="The assessed design" className="block max-h-[640px] max-w-full rounded-xl border bg-card" />
-      {annotations.map((a, i) => a.box && (
+      <img src={`${BASE}/api/assessments/${id}/image${screen ? `?screen=${screen}` : ""}`} alt="The assessed design" className="block max-h-[640px] max-w-full rounded-xl border bg-card" />
+      {annotations.map((a, i) => a.box && (a.screen ?? 0) === screen && (
         <div key={a.id} className="absolute" style={{ top: `${a.box[0] / 10}%`, left: `${a.box[1] / 10}%`, height: `${(a.box[2] - a.box[0]) / 10}%`, width: `${(a.box[3] - a.box[1]) / 10}%` }}>
           <div className={cn("size-full rounded-md border-2 border-dashed transition", activeId === a.id ? "border-foreground" : "border-foreground/30")} />
           <button type="button" onClick={() => onSelect(a.id)} aria-label={`Annotation ${i + 1}: ${a.title}`} className={cn("absolute -left-3 -top-3 z-10 grid size-7 place-items-center rounded-full border-2 border-card text-xs font-bold text-primary-foreground shadow-md", signalDot(a.signal), activeId === a.id && "scale-125 ring-2 ring-foreground")}>{i + 1}</button>
@@ -39,6 +40,8 @@ function AssessmentPage() {
   const profile = useProfile();
   const drawer = useEvidenceDrawer();
   const [active, setActive] = useState<string | null>(null);
+  const [screen, setScreen] = useState(0);
+  const select = (n: Annotation) => { setActive(n.id); setScreen(n.screen ?? 0); }; // choosing a finding shows the screen it is on
   const ids = useMemo(() => q.data?.annotations.flatMap((a) => a.evidenceIds) ?? [], [q.data]);
   const ev = useEvidence(ids);
   const map = new Map((ev.data ?? []).map((e) => [e.id, e]));
@@ -57,14 +60,17 @@ function AssessmentPage() {
       <p className="mt-2 max-w-3xl text-lg text-muted-foreground">{a.summary}</p>
       <div className="mt-8"><MetricsCard direction={a.direction} confidence={a.confidence} /></div>
       <Section eyebrow="Element by element" title="Where the prototype may help or hurt">
-        <div className={cn("grid gap-8", a.prototype.kind === "upload" ? "lg:grid-cols-[minmax(0,420px)_1fr]" : "lg:grid-cols-[320px_1fr]")}>
-          <div className="rounded-3xl bg-secondary p-6 lg:sticky lg:top-6 lg:self-start">{a.prototype.kind === "upload" ? <UploadedDesign id={a.id} annotations={a.annotations} activeId={active} onSelect={setActive} /> : <ProductCard annotations={a.annotations} activeId={active} onSelect={setActive} />}</div>
+        <div className={cn("grid gap-8", a.prototype.kind !== "local_sample" ? "lg:grid-cols-[minmax(0,420px)_1fr]" : "lg:grid-cols-[320px_1fr]")}>
+          <div className="rounded-3xl bg-secondary p-6 lg:sticky lg:top-6 lg:self-start">{a.prototype.kind !== "local_sample" ? (<>
+            {(a.screens?.length ?? 0) > 1 && <div role="tablist" aria-label="Screens" className="mb-4 flex flex-wrap gap-2">{a.screens!.map((sc, i) => <button key={i} role="tab" aria-selected={screen === i} onClick={() => setScreen(i)} className={cn("max-w-40 truncate rounded-full px-3 py-1 text-xs font-medium", screen === i ? "bg-card shadow-sm" : "text-muted-foreground hover:text-foreground")}><span className="tabular-nums">{i + 1}</span> · {sc.name}</button>)}</div>}
+            <UploadedDesign id={a.id} screen={screen} annotations={a.annotations} activeId={active} onSelect={(id) => { const n = a.annotations.find((x) => x.id === id); if (n) select(n); }} />
+          </>) : <ProductCard annotations={a.annotations} activeId={active} onSelect={setActive} />}</div>
           <ol className="space-y-3">
             {a.annotations.map((n, i) => (
               <li key={n.id}>
-                <div onMouseEnter={() => setActive(n.id)} className={cn("rounded-2xl border bg-card p-5 transition", active === n.id && "border-foreground/40 shadow-sm")}>
+                <div onMouseEnter={() => setActive(n.id)} onClick={() => select(n)} className={cn("rounded-2xl border bg-card p-5 transition", active === n.id && "border-foreground/40 shadow-sm")}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-semibold"><span className="mr-2 tabular-nums text-muted-foreground">{i + 1}</span>{n.title}</p>
+                    <p className="font-semibold"><span className="mr-2 tabular-nums text-muted-foreground">{i + 1}</span>{n.title}{(a.screens?.length ?? 0) > 1 && <span className="ml-2 text-xs font-normal text-muted-foreground">Screen {(n.screen ?? 0) + 1}</span>}</p>
                     <div className="flex items-center gap-2"><span className="rounded-md border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-persona">Prediction</span><SignalPill signal={n.signal} /></div>
                   </div>
                   <p className="mt-1 text-muted-foreground">{n.summary}</p>

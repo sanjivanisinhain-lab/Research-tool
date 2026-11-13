@@ -36,7 +36,12 @@ const SCHEMA_ASSESS = { type: "OBJECT", properties: {
 type Look = { design_title: string; design_summary: string; elements: { title: string; description: string; box_2d?: number[]; search_terms: string[] }[] };
 type Assessed = { headline: string; summary: string; elements: { index: number; signal: UiSignal; summary: string; evidence_ids: number[] }[]; signals: { evidence_id: number; signal: Signal }[]; conflict?: { title: string; body: string; evidence_ids: number[] } | null; unknowns: { title: string; body: string }[]; implications: Implications };
 
-export type AssessInput = { image: { data: Buffer; mimeType: string; name: string }; task: string; goal?: string; audience: AudienceRef[]; includeUnreviewed?: boolean; mediaDir: string; now?: Date };
+export type ScreenInput = { data: Buffer; mimeType: string; name: string; source?: "upload" | "figma" };
+export type AssessInput = { images: ScreenInput[]; figmaUrl?: string; task: string; goal?: string; audience: AudienceRef[]; includeUnreviewed?: boolean; mediaDir: string; now?: Date };
+
+const EXT: Record<string, string> = { "image/png": ".png", "image/webp": ".webp", "image/jpeg": ".jpg" };
+/** Where screen n of an assessment is kept. Screen 0 keeps the original file name so older assessments still open. */
+export const screenFile = (dir: string, id: string, n: number, mimeType: string) => path.join(dir, `${id}${n ? `-${n}` : ""}${EXT[mimeType] ?? ".jpg"}`);
 
 const validBox = (b?: number[]): Annotation["box"] | undefined => {
   if (!b || b.length !== 4 || b.some((n) => !Number.isFinite(n))) return undefined;
@@ -47,8 +52,14 @@ const validBox = (b?: number[]): Annotation["box"] | undefined => {
 export async function assessDesign(db: Db, ai: AiProvider, o: AssessInput): Promise<Assessment> {
   const statuses = o.includeUnreviewed ? ["approved", "pending"] : ["approved"];
   const members = audienceParticipants(db, o.audience);
-  const look = await ai.generateJsonWithMedia<Look>({ system: SYS_LOOK, schema: SCHEMA_LOOK, prompt: `Task the user will do with this design: ${o.task}${o.goal ? `\nLearning goal: ${o.goal}` : ""}` }, [{ mimeType: o.image.mimeType, data: o.image.data }]);
-  const elements = (look.elements ?? []).slice(0, 8);
+  // One look per screen. Each element remembers which screen it is on, so its marker lands on the right picture.
+  const perScreen = o.images.length > 1 ? 5 : 8;
+  const looks: Look[] = [];
+  for (const [n, img] of o.images.entries()) {
+    looks.push(await ai.generateJsonWithMedia<Look>({ system: SYS_LOOK, schema: SCHEMA_LOOK, prompt: `Task the user will do with this design: ${o.task}${o.goal ? `\nLearning goal: ${o.goal}` : ""}${o.images.length > 1 ? `\nThis is screen ${n + 1} of ${o.images.length} in the same flow (${img.name}).` : ""}` }, [{ mimeType: img.mimeType, data: img.data }]));
+  }
+  const look = { design_title: looks[0]?.design_title ?? "", design_summary: looks.map((l, n) => (o.images.length > 1 ? `Screen ${n + 1}: ` : "") + (l.design_summary ?? "")).join(" ") };
+  const elements = looks.flatMap((l, n) => (l.elements ?? []).slice(0, perScreen).map((el) => ({ ...el, screen: n })));
 
   // Retrieve evidence for each element locally (no AI), then let the AI judge only from what was retrieved.
   const pool = new Map<number, Hit>(); const perElement: Hit[][] = [];
@@ -58,17 +69,16 @@ export async function assessDesign(db: Db, ai: AiProvider, o: AssessInput): Prom
   }
   const id = "asm-" + crypto.randomBytes(5).toString("hex");
   const savedAt = new Date().toISOString();
-  const imgExt = o.image.mimeType === "image/png" ? ".png" : o.image.mimeType === "image/webp" ? ".webp" : ".jpg";
   fs.mkdirSync(o.mediaDir, { recursive: true });
-  const imagePath = path.join(o.mediaDir, `${id}${imgExt}`);
-  fs.writeFileSync(imagePath, o.image.data, { mode: 0o600 });
+  const imagePath = screenFile(o.mediaDir, id, 0, o.images[0]!.mimeType);
+  o.images.forEach((img, n) => fs.writeFileSync(screenFile(o.mediaDir, id, n, img.mimeType), img.data, { mode: 0o600 }));
 
   let annotations: Annotation[] = []; let unknowns: { title: string; body: string }[] = [];
   let headline = "", summary = "", conflict: Assessment["conflict"]; let implications = emptyImps();
   let conf = computeConfidence([], o.now); let stances: Record<string, "supports" | "contradicts"> = {};
 
   if (pool.size) {
-    const block = elements.map((el, i) => `ELEMENT ${i + 1}: ${el.title} (${el.description})\n` + (perElement[i].length ? perElement[i].map((h) => `  #${h.id} (${h.participantId}, ${h.kind}) ${h.translation ?? h.quote}`).join("\n") : "  (no evidence found)")).join("\n\n");
+    const block = elements.map((el, i) => `ELEMENT ${i + 1}: ${el.title} (${el.description}${o.images.length > 1 ? `; on screen ${el.screen + 1}` : ""})\n` + (perElement[i].length ? perElement[i].map((h) => `  #${h.id} (${h.participantId}, ${h.kind}) ${h.translation ?? h.quote}`).join("\n") : "  (no evidence found)")).join("\n\n");
     const raw = await ai.generateJson<Assessed>({ system: SYS_ASSESS, schema: SCHEMA_ASSESS, prompt: `Task: ${o.task}${o.goal ? `\nGoal: ${o.goal}` : ""}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\nDesign: ${look.design_summary}\n\n${block}` });
     // Integrity: signals only on retrieved evidence; confidence computed in code.
     const seen = new Set<number>();
@@ -88,7 +98,7 @@ export async function assessDesign(db: Db, ai: AiProvider, o: AssessInput): Prom
         continue;
       }
       const box = validBox(el.box_2d);
-      annotations.push({ id: `a${annotations.length + 1}`, element: el.title.toLowerCase().replace(/\s+/g, "_"), title: el.title, signal: e.signal, summary: e.summary, participants: people, evidenceIds: ids.map(String), ...(box ? { box } : {}) });
+      annotations.push({ id: `a${annotations.length + 1}`, element: el.title.toLowerCase().replace(/\s+/g, "_"), title: el.title, signal: e.signal, summary: e.summary, participants: people, evidenceIds: ids.map(String), ...(box ? { box } : {}), ...(o.images.length > 1 ? { screen: el.screen } : {}) });
     }
     const cids = [...new Set(raw.conflict?.evidence_ids ?? [])].filter((i) => pool.has(i)).map(String);
     if (raw.conflict && cids.length) conflict = { title: raw.conflict.title, body: raw.conflict.body, evidenceIds: cids };
@@ -103,15 +113,17 @@ export async function assessDesign(db: Db, ai: AiProvider, o: AssessInput): Prom
     headline = `Likely ${conf.direction.label.toLowerCase()} reaction`; // keep the headline consistent with the computed direction
   }
   const result: Assessment = {
-    id, title: look.design_title || "Uploaded design", prototype: { kind: "upload", name: "uploaded design", mimeType: o.image.mimeType }, task: o.task, ...(o.goal ? { goal: o.goal } : {}), audience: o.audience,
+    id, title: (look.design_title || "Uploaded design") + (o.images.length > 1 ? ` (${o.images.length} screens)` : ""),
+    prototype: o.figmaUrl ? { kind: "figma_link", url: o.figmaUrl } : { kind: "upload", name: "uploaded design", mimeType: o.images[0]!.mimeType },
+    screens: o.images.map((img) => ({ name: img.name, mimeType: img.mimeType, source: img.source ?? "upload" })), task: o.task, ...(o.goal ? { goal: o.goal } : {}), audience: o.audience,
     headline, summary, ...(conf.direction && !conf.withheld ? { direction: conf.direction } : {}),
     confidence: { score: conf.score, label: conf.label, participants: conf.participants, factors: conf.factors, methodStatus: conf.methodStatus },
     annotations, ...(conflict ? { conflict } : {}), unknowns, implications, evidenceStances: stances,
     evidenceStatus: o.includeUnreviewed ? "includes_unreviewed" : "approved_only", savedAt,
   };
   db.prepare("INSERT INTO assessments(id,task,audience_json,includes_unreviewed,assessment_json,image_path,image_mime,created_at) VALUES (?,?,?,?,?,?,?,?)")
-    .run(id, o.task, JSON.stringify(o.audience), o.includeUnreviewed ? 1 : 0, JSON.stringify(result), imagePath, o.image.mimeType, savedAt);
-  audit(db, "assessment", { id, elements: elements.length, annotated: annotations.length, participants: conf.participants, score: conf.score });
+    .run(id, o.task, JSON.stringify(o.audience), o.includeUnreviewed ? 1 : 0, JSON.stringify(result), imagePath, o.images[0]!.mimeType, savedAt);
+  audit(db, "assessment", { id, screens: o.images.length, elements: elements.length, annotated: annotations.length, participants: conf.participants, score: conf.score });
   return result;
 }
 

@@ -23,7 +23,9 @@ export type AskInput = {
 };
 
 export type AssessmentInput = {
-  prototype: Assessment["prototype"] & { data?: string }; // data = base64 image, only for uploads
+  prototype: Assessment["prototype"] & { data?: string }; // data = base64 image, only for a single upload (older form)
+  screens?: { name: string; mimeType: string; data: string }[]; // up to 6 images, base64
+  figmaUrl?: string; // a Figma frame or prototype link the server fetches
   task: string;
   goal?: string;
   audience: AudienceRef[];

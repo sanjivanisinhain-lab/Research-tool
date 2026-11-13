@@ -13,12 +13,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
-import { assessDesign } from "./ai/assess";
+import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
+import { fetchFigmaFrames, FigmaError, type FigmaFetch } from "./figma";
 import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; staticDir?: string; limits?: { aiPerHour?: number; notesPerHour?: number }; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; staticDir?: string; limits?: { aiPerHour?: number; notesPerHour?: number }; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string; figmaToken?: string; figmaFetch?: FigmaFetch };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
@@ -345,23 +346,48 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     if (typeof b.task !== "string" || !b.task.trim() || b.task.length > 1000) return res.status(400).json({ error: "task required" });
     const audience: AudienceRef[] = Array.isArray(b.audience) ? b.audience : [];
     if (!audience.length) return res.status(400).json({ error: "choose an audience" });
-    const proto = b.prototype ?? {};
-    if (proto.kind === "figma_link") return res.status(422).json({ error: "Figma links can't be opened yet. Export the frame as a PNG or JPG and upload that image." });
-    if (proto.kind !== "upload" || typeof proto.data !== "string") return res.status(400).json({ error: "upload a design image" });
-    if (!["image/png", "image/jpeg", "image/webp"].includes(proto.mimeType)) return res.status(400).json({ error: "design must be a PNG, JPG or WebP image" });
-    const data = Buffer.from(proto.data, "base64");
-    if (!data.length || data.length > 10 * 1024 * 1024) return res.status(400).json({ error: "image must be under 10 MB" });
+    const MAX_SCREENS = 6, TYPES = ["image/png", "image/jpeg", "image/webp"];
+    // Pictures come from uploads (screens, or the older single prototype upload) and/or a Figma link.
+    const raw: { name: string; mimeType: string; data: string }[] = Array.isArray(b.screens) ? b.screens
+      : b.prototype?.kind === "upload" && typeof b.prototype.data === "string" ? [b.prototype] : [];
+    if (raw.length > MAX_SCREENS) return res.status(400).json({ error: `up to ${MAX_SCREENS} screens at a time` });
+    const images: ScreenInput[] = [];
+    for (const r of raw) {
+      if (!r || typeof r.data !== "string" || !TYPES.includes(r.mimeType)) return res.status(400).json({ error: "each design must be a PNG, JPG or WebP image" });
+      const data = Buffer.from(r.data, "base64");
+      if (!data.length || data.length > 10 * 1024 * 1024) return res.status(400).json({ error: "each image must be under 10 MB" });
+      images.push({ data, mimeType: r.mimeType, name: String(r.name ?? "design").slice(0, 120), source: "upload" });
+    }
+    if (images.reduce((n, i) => n + i.data.length, 0) > 18 * 1024 * 1024) return res.status(400).json({ error: "the images together must be under 18 MB" });
+    const figmaUrl = typeof b.figmaUrl === "string" && b.figmaUrl.trim() ? b.figmaUrl.trim() : b.prototype?.kind === "figma_link" && typeof b.prototype.url === "string" ? b.prototype.url.trim() : "";
+    if (!images.length && !figmaUrl) return res.status(400).json({ error: "add a design image or a Figma link" });
     if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
     try {
-      const a = await assessDesign(db, opts.ai, { image: { data, mimeType: proto.mimeType, name: String(proto.name ?? "design") }, task: b.task.trim(), ...(typeof b.goal === "string" && b.goal.trim() ? { goal: b.goal.trim() } : {}), audience, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}), mediaDir: opts.assetsDir ?? "data/assessments" });
+      if (figmaUrl) {
+        const frames = await fetchFigmaFrames({ token: opts.figmaToken, url: figmaUrl, max: MAX_SCREENS - images.length, ...(opts.figmaFetch ? { fetchImpl: opts.figmaFetch } : {}) });
+        for (const fr of frames) images.push({ ...fr, source: "figma" });
+      }
+      const a = await assessDesign(db, opts.ai, { images, ...(figmaUrl ? { figmaUrl } : {}), task: b.task.trim(), ...(typeof b.goal === "string" && b.goal.trim() ? { goal: b.goal.trim() } : {}), audience, ...(opts.includeUnreviewed ? { includeUnreviewed: true } : {}), mediaDir: opts.assetsDir ?? "data/assessments" });
       db.prepare("UPDATE assessments SET user_id=? WHERE id=?").run(req.user!.id, a.id);
       res.json({ id: a.id });
-    } catch (e) { console.error("assessment failed:", (e as Error).message); res.status(502).json({ error: "assessment failed" }); }
+    } catch (e) {
+      if (e instanceof FigmaError) return res.status(e.status).json({ error: e.message });
+      console.error("assessment failed:", (e as Error).message); res.status(502).json({ error: "assessment failed" });
+    }
   });
   app.get("/api/assessments/:id/image", (req, res) => {
-    const r = db.prepare("SELECT image_path p, image_mime m, user_id u FROM assessments WHERE id=?").get(String(req.params.id)) as { p: string | null; m: string | null; u: string | null } | undefined;
-    if (!r?.p || !canSee(req, r.u) || !fs.existsSync(r.p)) return res.status(404).end();
-    res.type(r.m ?? "image/png").send(fs.readFileSync(r.p));
+    const r = db.prepare("SELECT image_path p, image_mime m, assessment_json j, user_id u FROM assessments WHERE id=?").get(String(req.params.id)) as { p: string | null; m: string | null; j: string; u: string | null } | undefined;
+    if (!r?.p || !canSee(req, r.u)) return res.status(404).end();
+    const n = Number(req.query["screen"] ?? 0);
+    if (!Number.isInteger(n) || n < 0 || n > 5) return res.status(404).end();
+    let file = r.p, mime = r.m;
+    if (n > 0) { // later screens sit next to the first, named by their position
+      mime = (JSON.parse(r.j) as { screens?: { mimeType: string }[] }).screens?.[n]?.mimeType ?? null;
+      if (!mime) return res.status(404).end();
+      file = screenFile(path.dirname(r.p), String(req.params.id), n, mime);
+    }
+    if (!fs.existsSync(file)) return res.status(404).end();
+    res.type(mime ?? "image/png").send(fs.readFileSync(file));
   });
   app.get("/api/assessments/:id", (req, res) => {
     const r = db.prepare("SELECT assessment_json j, user_id u FROM assessments WHERE id=?").get(String(req.params.id)) as { j: string; u: string | null } | undefined;

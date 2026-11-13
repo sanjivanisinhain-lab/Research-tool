@@ -148,6 +148,7 @@ export type AudienceProfile = {
 export type Annotation = {
   id: string;
   element: string; // "price" | "countdown" | "original_price" for the sample card; any label for uploaded designs
+  screen?: number; // which screen it is on (0-based) when an assessment has several
   box?: [number, number, number, number]; // [ymin, xmin, ymax, xmax] on a 0-1000 scale, for uploaded designs
   title: string;
   signal: Signal;
@@ -160,6 +161,7 @@ export type Assessment = {
   id: string;
   title: string;
   prototype: { kind: "local_sample" } | { kind: "figma_link"; url: string } | { kind: "upload"; name: string; mimeType: string };
+  screens?: { name: string; mimeType: string; source: "upload" | "figma" }[]; // the pictures that were assessed, in order
   task: string;
   goal?: string;
   audience: AudienceRef[];

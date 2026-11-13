@@ -17,7 +17,7 @@ for (const w of securityWarnings(cfg, userCount)) console.warn(`WARNING: ${w}`);
 
 const stopWorker = startWorker(db, ai, 2000, cfg.mediaDir);
 const app = createApp(db, {
-  ai, includeUnreviewed: cfg.includeUnreviewed, termsPath: cfg.termsPath, mediaDir: cfg.mediaDir, assetsDir: cfg.assetsDir,
+  ai, includeUnreviewed: cfg.includeUnreviewed, termsPath: cfg.termsPath, mediaDir: cfg.mediaDir, assetsDir: cfg.assetsDir, figmaToken: cfg.figmaToken,
   ...(cfg.staticDir ? { staticDir: cfg.staticDir } : {}), limits: { aiPerHour: cfg.rateAiPerHour, notesPerHour: cfg.rateNotesPerHour },
   auth: { allowedEmailDomains: cfg.allowedEmailDomains, ...(cfg.setupCode ? { setupCode: cfg.setupCode } : {}), cookieSecure: cfg.cookieSecure },
 });
