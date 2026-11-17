@@ -26,7 +26,6 @@ const SYS_ANSWER = `You answer a product team's question about a user audience u
 - headline: a direct answer in under 12 words. It MUST agree with your own signals: if most relevant participants signal negative, the headline says the likely reaction is negative (and vice versa); only say "mixed" if the signals are genuinely split. summary: 1-3 sentences, also consistent with the signals. Quote nothing yourself; quotes are shown separately.
 - Items marked [overview] are a general sample of the audience's research, not matched to your question: use them for broad questions (typical behaviour, habits) by summarising the recurring themes they show; for a specific question they are not evidence unless they actually address it.
 - coverage: "direct" if the evidence speaks to what was actually asked; "general" if it only gives related background (for example the question is about one specific feature or situation and the evidence is about shopping habits in general). When "general", coverage_note is one plain sentence saying what the research does not cover. Be strict: do not say "direct" just because the topic is nearby.
-- Write for busy people who are not researchers: short everyday words, no jargon, no research or AI terms.
 - Be tentative when the evidence is thin.`;
 
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };

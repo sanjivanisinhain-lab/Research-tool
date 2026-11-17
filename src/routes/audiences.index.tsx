@@ -18,7 +18,7 @@ function Audiences() {
   const list = (q.data ?? []).filter((a) => a.ref.kind === tab && a.ref.name.toLowerCase().includes(s.toLowerCase()));
   return (
     <div>
-      <PageHeader eyebrow="Audience library" title="Understand who your research represents." sub="Groups are real people who have something in common, like how they pay. Typical people are made by combining what several of them said." />
+      <PageHeader eyebrow="Audience library" title="Understand who your research represents." sub="Segments are participant cohorts. Personas are behavioural profiles derived from evidence." />
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-full bg-secondary p-1">
           {(["segment", "persona"] as const).map((t) => <Button variant="ghost" key={t} onClick={() => setTab(t)} aria-pressed={tab === t} className={cn("rounded-full px-5 py-1.5 text-sm font-medium", tab === t ? "bg-card shadow-sm" : "text-muted-foreground")}>{t === "segment" ? "Segments" : "Personas"}</Button>)}
@@ -35,12 +35,12 @@ function Audiences() {
             <Link key={a.ref.id} to="/audiences/$kind/$id" params={{ kind: a.ref.kind, id: a.ref.id }} className="research-card group flex flex-col rounded-lg border bg-card p-6 hover:border-foreground/30">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <span className={cn("grid size-12 place-items-center rounded-2xl font-display text-lg font-semibold", a.ref.kind === "segment" ? "bg-segment-soft text-segment" : "bg-persona-soft text-persona")}>{a.initials}</span>
-                <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-semibold", high ? "bg-strong-soft text-strong" : "bg-mixed-soft text-mixed")}>{high ? "Well backed by research" : "Some research"} · {a.evidenceStrength}%</span>
+                <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-semibold", high ? "bg-strong-soft text-strong" : "bg-mixed-soft text-mixed")}>{a.evidenceStrength}% evidence · {high ? "High" : "Medium"}</span>
               </div>
               <h2 className="mt-5 text-xl font-semibold">{a.ref.name}</h2>
               <p className="mt-1 flex-1 text-sm text-muted-foreground">{a.description}</p>
               <div className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t pt-4 text-xs">
-                <span className="text-muted-foreground"><b className="text-foreground tabular-nums">{a.ref.participants}</b> people · <b className="text-foreground">{a.corePatterns}</b> findings</span>
+                <span className="text-muted-foreground"><b className="text-foreground tabular-nums">{a.ref.participants}</b> participants · <b className="text-foreground">{a.corePatterns}</b> patterns</span>
                 <span className="inline-flex items-center gap-1 font-medium">Explore <ArrowRight className="size-4 transition group-hover:translate-x-0.5" /></span>
               </div>
             </Link>

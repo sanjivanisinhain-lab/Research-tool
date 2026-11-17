@@ -34,7 +34,7 @@ async function readAttachment(f: File): Promise<Attachment> {
   return { name: f.name, kind: "local", mimeType: f.type || "application/octet-stream", data };
 }
 
-const STEPS = ["Finding the research that fits", "Checking where people agree", "Checking where they disagree", "Checking how strong the evidence is"];
+const STEPS = ["Finding relevant evidence", "Checking agreement", "Checking contradictions", "Assessing evidence strength"];
 // A browser can only listen for one language at a time. The Hindi setting understands Hindi, English and the mix of both people speak naturally.
 const VOICE_LANGUAGE = "hi-IN";
 

@@ -279,6 +279,8 @@ export function migrateV13(db: Db) {
   add("sheet_rows", "hash2", "TEXT");
   add("sheet_links", "imported", "INTEGER NOT NULL DEFAULT 0");
   add("sheet_links", "preview_json", "TEXT");
+  add("segments", "plain_name", "INTEGER NOT NULL DEFAULT 0"); // 1 once the name has been put in plain words
+  add("personas", "plain_name", "INTEGER NOT NULL DEFAULT 0");
   add("sheet_links", "ignored_json", "TEXT NOT NULL DEFAULT '[]'"); // words the admin said are not names
   db.exec("CREATE INDEX IF NOT EXISTS idx_sheet_rows_ext ON sheet_rows(link_id, tab, external_id)");
 }

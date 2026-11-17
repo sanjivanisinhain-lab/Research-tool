@@ -63,7 +63,6 @@ export const adminApi = {
   sources: () => call<AdminSource[]>("/api/admin/sources"),
   sourceText: (id: string) => call<SourceText>(`/api/admin/sources/${id}/utterances`),
   jobs: () => call<JobsInfo>("/api/admin/jobs"),
-  rewordAudiences: () => call<{ groups: number; statements: number }>("/api/admin/audiences/reword", json("POST")),
   rebuildAudiences: () => call<{ jobId: number }>("/api/admin/jobs/rebuild-audiences", json("POST")),
   retryJob: (id: number) => call<{ ok: boolean }>(`/api/admin/jobs/${id}/retry`, json("POST")),
   review: (status: "pending" | "approved" | "rejected", limit = 25) => call<{ total: number; items: ReviewItem[] }>(`/api/admin/evidence?status=${status}&limit=${limit}`),

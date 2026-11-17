@@ -82,17 +82,17 @@ export function AudiencePickerDialog({
           </div>
           <div className="relative mt-4">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search groups and typical people" aria-label="Search groups and typical people" className="h-11 w-full rounded-xl border bg-card pl-9 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search segments and personas" aria-label="Search segments and personas" className="h-11 w-full rounded-xl border bg-card pl-9 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
           </div>
           {q.isLoading && <div className="mt-6 space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>}
           {q.isError && <div className="mt-6"><ErrorState onRetry={() => q.refetch()} /></div>}
-          {q.data && (<>{group("segment", "Groups of real people", "Share something in common")}{group("persona", "Typical people", "Built from several real people")}</>)}
+          {q.data && (<>{group("segment", "Participant segments", "Cohorts")}{group("persona", "Research-backed personas", "Behavioural profiles")}</>)}
           {m === "compare" && sel.length === 1 && <p className="mt-4 text-sm text-mixed">Pick at least two audiences to compare.</p>}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-card px-6 py-4">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{summary}</p>
-            <p className="text-xs text-muted-foreground tabular-nums">{count.data ?? 0} people, each counted once</p>
+            <p className="text-xs text-muted-foreground tabular-nums">{count.data ?? 0} matching participants, counted once</p>
           </div>
           <Button className="rounded-full px-5" disabled={sel.length === 0 || (m === "compare" && sel.length < 2)} onClick={() => { onApply(sel, m); onOpenChange(false); }}>
             Use this audience

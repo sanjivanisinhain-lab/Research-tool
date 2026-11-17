@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { openDb } from "../db";
-import { rewordAudiences, synthesise } from "../ai/personas";
+import { needsPlainNames, plainNames, synthesise } from "../ai/personas";
+import { startWorker } from "../jobs";
 import { MockProvider } from "../ai/provider";
 
 function seed() {
@@ -40,32 +41,44 @@ describe("synthesis", () => {
   });
 });
 
-describe("plain wording", () => {
-  it("asks for everyday words when it defines groups and writes traits", async () => {
-    const systems: string[] = [];
-    await synthesise(seed(), new MockProvider((req: any) => { systems.push(req.system); return responder(req); }));
-    for (const key of ["define user SEGMENTS", "evidence-backed traits"]) expect(systems.find((x) => x.includes(key))).toMatch(/not researchers/);
+describe("plain names", () => {
+  const rename = (db: ReturnType<typeof seed>) => {
+    const seg = db.prepare("SELECT id FROM segments").get() as { id: string }; const per = db.prepare("SELECT id FROM personas").get() as { id: string };
+    return new MockProvider((req: any) => ({ items: req.prompt.includes("Typical people") ? [{ id: per.id, name: "People who want to see it before paying" }, { id: "PER-invented", name: "x" }] : [{ id: seg.id, name: "Pay cash on delivery" }, { id: seg.id, name: "dup" }] }));
+  };
+  it("asks for plain names when it builds groups, and builds them already plain", async () => {
+    const systems: string[] = []; const db = seed();
+    await synthesise(db, new MockProvider((req: any) => { systems.push(req.system); return responder(req); }));
+    expect(systems.find((x) => x.includes("define user SEGMENTS"))).toMatch(/non-researcher/);
+    expect(systems.find((x) => x.includes("evidence-backed traits"))).not.toMatch(/non-researcher/); // only names are changed
+    expect(needsPlainNames(db)).toBe(false);
   });
-  it("says existing groups again in simple words without touching members, evidence or conversations", async () => {
+  it("renames older groups, name only: descriptions, members, evidence and chats are untouched", async () => {
     const db = seed();
     await synthesise(db, new MockProvider(responder));
-    const seg = db.prepare("SELECT id FROM segments").get() as { id: string }; const per = db.prepare("SELECT id, name FROM personas").get() as { id: string; name: string };
+    db.exec("UPDATE segments SET plain_name=0; UPDATE personas SET plain_name=0");
+    const per = db.prepare("SELECT id, name, description FROM personas").get() as { id: string; name: string; description: string };
+    const seg = db.prepare("SELECT characteristic FROM segments").get() as { characteristic: string };
     db.prepare("INSERT INTO persona_messages(id,user_id,persona_id,persona_name,sender,text,created_at) VALUES ('m1','u',?,?,'user','hi','x')").run(per.id, per.name);
-    const seen: string[] = [];
-    const ai = new MockProvider((req: any) => {
-      seen.push(req.system);
-      if (req.system.includes("names and descriptions")) return { items: req.prompt.includes("typical people") ? [{ id: per.id, name: "People who want to see the product before paying", description: "They pay cash on delivery." }, { id: "PER-invented", name: "x", description: "y" }] : [{ id: seg.id, name: "Pay cash on delivery", description: "They hand over cash when it arrives." }, { id: seg.id, name: "dup", description: "dup" }] };
-      return { traits: [{ id: 1, text: "They do not trust paying first." }, { id: 9999, text: "invented" }, { id: 2, text: "" }] };
-    });
-    const r = await rewordAudiences(db, ai);
-    expect(r).toEqual({ groups: 2, statements: 1 });
-    expect(db.prepare("SELECT name, characteristic FROM segments").get()).toEqual({ name: "Pay cash on delivery", characteristic: "They hand over cash when it arrives." });
-    expect(db.prepare("SELECT name FROM personas").get()).toEqual({ name: "People who want to see the product before paying" });
-    expect(db.prepare("SELECT persona_name FROM persona_messages").get()).toEqual({ persona_name: "People who want to see the product before paying" });
-    expect(db.prepare("SELECT text FROM persona_traits WHERE id=1").get()).toEqual({ text: "They do not trust paying first." });
-    expect(db.prepare("SELECT COUNT(*) n FROM persona_participants").get()).toEqual({ n: 3 }); // members unchanged
-    expect(db.prepare("SELECT COUNT(*) n FROM persona_trait_evidence").get()).toEqual({ n: 2 }); // evidence links unchanged
-    expect(seen.every((x) => /not researchers/.test(x))).toBe(true);
-    await expect(rewordAudiences(openDb(":memory:"), ai)).rejects.toThrow(/no segments/);
+    expect(needsPlainNames(db)).toBe(true);
+    expect(await plainNames(db, rename(db))).toEqual({ renamed: 2 });
+    expect(db.prepare("SELECT name, characteristic FROM segments").get()).toEqual({ name: "Pay cash on delivery", characteristic: seg.characteristic });
+    expect(db.prepare("SELECT name, description FROM personas").get()).toEqual({ name: "People who want to see it before paying", description: per.description });
+    expect(db.prepare("SELECT persona_name FROM persona_messages").get()).toEqual({ persona_name: "People who want to see it before paying" });
+    expect(db.prepare("SELECT COUNT(*) n FROM persona_participants").get()).toEqual({ n: 3 });
+    expect(db.prepare("SELECT COUNT(*) n FROM persona_trait_evidence").get()).toEqual({ n: 2 });
+    expect(needsPlainNames(db)).toBe(false);
+    expect(await plainNames(openDb(":memory:"), rename(db))).toEqual({ renamed: 0 });
+  });
+  it("happens by itself in the background, with nothing to press", async () => {
+    const db = seed();
+    await synthesise(db, new MockProvider(responder));
+    db.exec("UPDATE segments SET plain_name=0; UPDATE personas SET plain_name=0");
+    const stop = startWorker(db, rename(db), 10);
+    try {
+      for (let i = 0; i < 100 && needsPlainNames(db); i++) await new Promise((r) => setTimeout(r, 20));
+      expect(needsPlainNames(db)).toBe(false);
+      expect(db.prepare("SELECT name FROM personas").get()).toEqual({ name: "People who want to see it before paying" });
+    } finally { stop(); }
   });
 });

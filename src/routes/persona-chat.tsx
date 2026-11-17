@@ -44,7 +44,7 @@ function PersonaChat() {
 
   return (
     <div>
-      <PageHeader eyebrow="Persona conversation" title="Talk to a typical person from the research." sub="This is not a real person. Answers imitate someone typical, using only what the research says. Open the evidence to check any answer." />
+      <PageHeader eyebrow="Persona conversation" title="Explore a perspective, without pretending it's a person." sub="Responses simulate a behavioural profile grounded in research. Inspect evidence when available." />
       <div className="mb-6"><PersonaChips selected={[pid]} onSelect={(p) => { if (!send.isPending) setPid(p.id); }} /></div>
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         <div>
