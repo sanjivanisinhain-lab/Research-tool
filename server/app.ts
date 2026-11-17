@@ -15,7 +15,8 @@ import type { AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
 import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
-import { createLink, listLinks, sheetRefs, sheetView, syncSheet } from "./sheets";
+import { createLink, listLinks, sheetRefs, sheetRow, sheetView, syncSheet } from "./sheets";
+import { addNamesToTerms } from "./sheetsHub";
 import { fetchFigmaFrames, FigmaError, type FigmaFetch } from "./figma";
 import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
@@ -418,12 +419,30 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.post("/api/admin/sheets/:id/sync", async (req, res) => {
     if (!opts.googleSheets) return res.status(422).json({ error: "Google Sheets isn't set up on the server yet." });
     if (!db.prepare("SELECT 1 FROM sheet_links WHERE id=?").get(String(req.params.id))) return res.status(404).end();
-    res.json(await syncSheet(db, opts.googleSheets, String(req.params.id), { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}), force: req.body?.force === true }));
+    res.json(await syncSheet(db, opts.googleSheets, String(req.params.id), { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}), force: req.body?.force === true, import: req.body?.import === true, withdrawOverlap: req.body?.withdrawOverlap === true }));
+  });
+  // Review step before a sheet of participants is imported: confirm names that were not in the Name column, or say a word is not a name.
+  app.post("/api/admin/sheets/:id/names", async (req, res) => {
+    if (!opts.googleSheets) return res.status(422).json({ error: "Google Sheets isn't set up on the server yet." });
+    const id = String(req.params.id);
+    const link = db.prepare("SELECT ignored_json j FROM sheet_links WHERE id=?").get(id) as { j: string } | undefined;
+    if (!link) return res.status(404).end();
+    const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length >= 2 && x.length <= 60).slice(0, 200) : []);
+    const names = list(req.body?.names), notNames = list(req.body?.notNames);
+    if (names.length) { addNamesToTerms(opts.termsPath, names); audit(db, "sheet.names_added", { id, count: names.length, by: req.user!.id }); }
+    if (notNames.length) db.prepare("UPDATE sheet_links SET ignored_json=? WHERE id=?").run(JSON.stringify([...new Set([...(JSON.parse(link.j) as string[]), ...notNames])]), id);
+    res.json(await syncSheet(db, opts.googleSheets, id, { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) })); // the report is made again with the new names removed
   });
   app.patch("/api/admin/sheets/:id", (req, res) => {
     if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "enabled must be true or false" });
     const r = db.prepare("UPDATE sheet_links SET enabled=? WHERE id=?").run(req.body.enabled ? 1 : 0, String(req.params.id));
     return r.changes ? res.json({ ok: true }) : res.status(404).end();
+  });
+  app.get("/api/sheets/:id/row", (req, res) => {
+    const row = Number(req.query["row"]), ev = Number(req.query["evidence"]);
+    if (typeof req.query["tab"] !== "string" || !Number.isInteger(row) || row < 1) return res.status(400).json({ error: "tab and row are required" });
+    const d = sheetRow(db, String(req.params.id), { tab: req.query["tab"], row, ...(Number.isInteger(ev) && ev > 0 ? { evidenceId: ev } : {}) });
+    return d ? res.json(d) : res.status(404).end();
   });
   // Any signed-in person can open the redacted view that an insight came from.
   app.get("/api/sheets/:id/view", (req, res) => {

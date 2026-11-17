@@ -153,7 +153,7 @@ describe("the sheet view and source links over the API", () => {
     expect(later.rows.map((x: any) => x.row)).toEqual([3]); expect(later.hasNext).toBe(false); expect(later.hasPrev).toBe(true);
     expect(JSON.stringify(view)).not.toMatch(/Renu|Jaipur|9876543210/);
     // evidence from that row points back to it
-    const src = (db.prepare("SELECT source_id s, participant_id p FROM sheet_rows r JOIN sources so ON so.id=r.source_id WHERE row_number=3").get() as any);
+    const src = (db.prepare("SELECT r.source_id s, so.participant_id p FROM sheet_rows r JOIN sources so ON so.id=r.source_id WHERE r.row_number=3").get() as any);
     db.prepare("INSERT INTO evidence(source_id,participant_id,original_text,kind,provenance,theme,sentiment,status,created_at) VALUES (?,?,?,'said','researcher_note','price','neutral','approved','x')").run(src.s, src.p, "discount dekhti hoon");
     const evId = (db.prepare("SELECT id FROM evidence").get() as { id: number }).id;
     const ev = await (await fetch(`${base}/api/evidence?ids=${evId}`)).json();

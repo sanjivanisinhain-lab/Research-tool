@@ -66,6 +66,7 @@ export function openDb(file = process.env["DB_PATH"] ?? `${process.env["DATA_DIR
   db.exec(SCHEMA_V10);
   migrateV11(db);
   db.exec(SCHEMA_V12);
+  migrateV13(db);
   return db;
 }
 
@@ -265,6 +266,22 @@ CREATE TABLE IF NOT EXISTS sheet_rows (
 CREATE INDEX IF NOT EXISTS idx_sheet_rows_pos ON sheet_rows(link_id, tab, row_number);
 CREATE INDEX IF NOT EXISTS idx_sheet_rows_source ON sheet_rows(source_id);
 `;
+
+/** Sheets with one row per participant (ID, transcript and/or notes): rows are known by their Participant ID, and a new link is reviewed before anything is imported. */
+export function migrateV13(db: Db) {
+  const add = (table: string, col: string, ddl: string) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+  };
+  add("sheet_rows", "external_id", "TEXT");        // the Participant ID written in the sheet
+  add("sheet_rows", "participant_id", "TEXT");     // the tool's participant for this row
+  add("sheet_rows", "source2_id", "TEXT");         // notes source, when the row has a transcript too (source_id is the transcript)
+  add("sheet_rows", "hash2", "TEXT");
+  add("sheet_links", "imported", "INTEGER NOT NULL DEFAULT 0");
+  add("sheet_links", "preview_json", "TEXT");
+  add("sheet_links", "ignored_json", "TEXT NOT NULL DEFAULT '[]'"); // words the admin said are not names
+  db.exec("CREATE INDEX IF NOT EXISTS idx_sheet_rows_ext ON sheet_rows(link_id, tab, external_id)");
+}
 
 export function migrateV4(db: Db) {
   const srcCols = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];

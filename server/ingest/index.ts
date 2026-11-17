@@ -53,7 +53,7 @@ function addParticipant(db: Db, studyId: string, meta: Record<string, string>): 
   return id;
 }
 
-function parseDmy(s: string): string | null {
+export function parseDmy(s: string): string | null {
   const m = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(s.trim());
   return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
 }
@@ -237,4 +237,37 @@ export function ingestTimedTranscript(db: Db, turns: { speaker: string; text: st
     db.exec("COMMIT");
     return { sourceId: sid, participantId: pid, redaction: counts };
   } catch (e) { db.exec("ROLLBACK"); throw e; }
+}
+
+/** One part (transcript or notes) of a participant row from a research sheet. Runs inside the caller's transaction. */
+export function ingestHubSource(db: Db, redact: ReturnType<typeof makeRedactor>, o: {
+  studyName: string; product: string; externalId: string; participantId: string | null; text: string; kind: "transcript" | "notes";
+  type: "interview" | "cx_call" | "usability"; date: string | null; noisy: boolean; submittedBy?: SubmittedBy;
+}): { sourceId: string; participantId: string; counts: RedactionCounts; existing: boolean } | null {
+  let turns: { speaker: string; text: string }[] = [];
+  let verbatim = false;
+  if (o.kind === "transcript") {
+    turns = /Speaker\s+[A-Z]\s*\.{2,}/.test(o.text) ? parseSpeakerBlocks(o.text) : parseLabelledTurns(o.text);
+    verbatim = turns.length > 0;
+  }
+  if (!turns.length) turns = o.text.split(/\n+/).map((t) => t.trim()).filter(Boolean).map((text) => ({ speaker: "note", text }));
+  let counts = zeroCounts();
+  const red = turns.map((t) => { const r = redact(t.text); counts = addCounts(counts, r.counts); return { speaker: t.speaker, text: r.text }; }).filter((t) => t.text.trim());
+  if (!red.length) return null;
+  const key = sha(`hub|${o.externalId}|${o.kind}|${red.map((t) => t.text).join("\n")}`);
+  const dup = db.prepare("SELECT id, participant_id p, status FROM sources WHERE external_key=?").get(key) as { id: string; p: string | null; status: string } | undefined;
+  if (dup) { // the same text as before (for example an edit that was undone): bring it back if it had been withdrawn
+    if (dup.status === "rejected") {
+      db.prepare("UPDATE sources SET status='approved' WHERE id=?").run(dup.id);
+      db.prepare("UPDATE evidence SET status='approved', review_note=NULL WHERE source_id=? AND review_note LIKE 'Replaced:%'").run(dup.id);
+    }
+    return { sourceId: dup.id, participantId: dup.p ?? "", counts: zeroCounts(), existing: true };
+  }
+  const studyId = ensureStudy(db, o.studyName, o.product);
+  const pid = o.participantId ?? addParticipant(db, studyId, { external_id: o.externalId });
+  const sid = addSource(db, { studyId, participantId: pid, type: o.type, origin: verbatim ? "verbatim_transcript" : "researcher_notes", title: `${o.externalId} · ${o.kind}`,
+    date: parseDmy(o.date ?? ""), lang: detectLanguage(red.map((t) => t.text).join(" ")), key, counts, quality: o.noisy ? "noisy_asr" : undefined, submittedBy: o.submittedBy ?? "research_team" });
+  if (!sid) return null;
+  addUtterances(db, sid, pid, red);
+  return { sourceId: sid, participantId: pid, counts, existing: false };
 }
