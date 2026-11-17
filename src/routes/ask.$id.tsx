@@ -4,8 +4,8 @@ import { ArrowLeft } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
 import { useAnswer, useProfile } from "@/api/hooks";
-import { AnswerView } from "@/components/research/AnswerView";
-import { FollowUpComposer, FollowUpThread } from "@/components/research/AnswerParts";
+import { AnswerView, FollowUpThread } from "@/components/research/AnswerView";
+import { FollowUpComposer } from "@/components/research/AnswerParts";
 import { AudiencePickerDialog } from "@/components/research/AudiencePickerDialog";
 import { ClaimTag, EmptyState, ErrorState, Eyebrow, LoadingBlock, relativeTime } from "@/components/research/primitives";
 import { Button } from "@/components/ui/button";
@@ -63,7 +63,7 @@ function AnswerPage() {
       </div>
       <div className="mt-10"><AnswerView answer={a} role={profile.data?.role ?? "designer"} onFollowUp={focus} onCompare={() => setPicker(true)} onPlanTest={() => reask.mutate({ question: "How should I test this?", audience: a.audience, mode: "combine", attachments: [], contextAnswerId: a.id })}
           {...(a.variant === "study_plan" && a.studyPlan ? { onReviewQuestions: () => reask.mutate({ question: "Check these questions for bias", audience: a.audience, mode: "combine", attachments: [{ name: "Study plan questions", kind: "transcript", text: a.studyPlan!.questions.map((q, i) => `${i + 1}. ${q}`).join("\n") }] }) } : {})} /></div>
-      <FollowUpThread followUps={a.followUps ?? []} pendingText={pendingText} error={follow.isError ? (follow.error as Error).message : null} />
+      <FollowUpThread role={profile.data?.role ?? "designer"} followUps={a.followUps ?? []} pendingText={pendingText} error={follow.isError ? (follow.error as Error).message : null} />
       <FollowUpComposer onSend={(t) => follow.mutate(t)} pending={follow.isPending} />
       <AudiencePickerDialog open={picker} onOpenChange={setPicker} value={a.audience} mode="combine" onApply={(v, m) => reask.mutate({ question: a.question, audience: v, mode: m, attachments: a.attachments ?? [] })} />
     </div>

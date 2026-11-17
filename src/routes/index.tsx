@@ -34,7 +34,9 @@ async function readAttachment(f: File): Promise<Attachment> {
   return { name: f.name, kind: "local", mimeType: f.type || "application/octet-stream", data };
 }
 
-const STEPS = ["Finding relevant evidence", "Checking agreement", "Checking contradictions", "Assessing evidence strength"];
+const STEPS = ["Finding the research that fits", "Checking where people agree", "Checking where they disagree", "Checking how strong the evidence is"];
+// A browser can only listen for one language at a time. The Hindi setting understands Hindi, English and the mix of both people speak naturally.
+const VOICE_LANGUAGE = "hi-IN";
 
 function AskPage() {
   const { audience: pre } = Route.useSearch();
@@ -63,7 +65,6 @@ function AskPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [transcript, setTranscript] = useState("");
   const [showTranscript, setShowTranscript] = useState(false);
-  const [voiceLanguage, setVoiceLanguage] = useState("en-IN");
   const dictation = useDictation((text) => setQ((current) => `${current}${current ? " " : ""}${text}`));
   const [step, setStep] = useState(-1);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -111,7 +112,7 @@ function AskPage() {
       <div className="mt-3"><PersonaChips selected={audience.map((a) => a.id)} onSelect={(p) => { setAuto(false); setAudience((a) => a.some((x) => x.id === p.id) ? a.filter((x) => x.id !== p.id) : [...a, p]); }} /></div>
       <div className="ask-composer mt-5 rounded-2xl border bg-card p-3 focus-within:border-brand/40">
         <label htmlFor="ask" className="sr-only">Your question</label>
-        <textarea id="ask" rows={4} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask what the research suggests, review a script, or share an idea…" className="w-full resize-none bg-transparent p-3 text-lg outline-none placeholder:text-muted-foreground" />
+        <textarea id="ask" rows={4} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (q.trim() && (auto || audience.length > 0) && !ask.isPending) submit(); } }} placeholder="Ask what the research suggests, review a script, or share an idea… (Enter to send, Shift+Enter for a new line)" className="w-full resize-none bg-transparent p-3 text-lg outline-none placeholder:text-muted-foreground" />
         {dictation.listening && <p role="status" className="px-3 pb-3 text-sm text-brand">Listening… {dictation.interim}</p>}
         {dictation.error && <p role="alert" className="px-3 pb-3 text-xs text-risk">{dictation.error}</p>}
         {showTranscript && <section className="mx-3 mb-3 rounded-lg border bg-muted/40 p-3"><div className="mb-2 flex items-center justify-between"><label htmlFor="cx-transcript" className="text-xs font-semibold">CX transcript · your material</label><Button variant="ghost" size="icon" aria-label="Remove pasted transcript" onClick={() => { setShowTranscript(false); setTranscript(""); }}><X /></Button></div><textarea id="cx-transcript" rows={4} value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder="Paste caller notes or a transcript in English, Hindi or Hinglish…" className="w-full resize-y bg-transparent text-sm outline-none" /><p className="mt-2 text-xs text-muted-foreground">Not added to repository evidence. The mock answer does not analyse this transcript.</p></section>}
@@ -120,8 +121,7 @@ function AskPage() {
           <div className="flex flex-wrap items-center gap-1">
           <Button variant="ghost" size="icon" title="Add material" aria-label="Add material" onClick={() => fileRef.current?.click()} className="rounded-full text-muted-foreground"><Paperclip /></Button>
           <Button variant="ghost" size="icon" title="Paste CX transcript" aria-label="Paste CX transcript" aria-pressed={showTranscript} onClick={() => setShowTranscript((s) => !s)} className={cn("rounded-full text-muted-foreground", showTranscript && "bg-brand-soft text-brand")}><FileText /></Button>
-          <Button variant="ghost" size="icon" title={dictation.supported ? "Dictate question" : "Voice input unavailable in this browser"} aria-label={dictation.listening ? "Stop dictation" : "Dictate question"} aria-pressed={dictation.listening} onClick={() => dictation.listening ? dictation.stop() : dictation.start(voiceLanguage)} className={cn("rounded-full text-muted-foreground", dictation.listening && "bg-risk-soft text-risk")}>{dictation.listening ? <Square /> : <Mic />}</Button>
-          <select aria-label="Dictation language" disabled={dictation.listening} value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)} className="max-w-32 rounded-full border bg-background px-2 py-1.5 text-xs text-muted-foreground"><option value="en-IN">English (India)</option><option value="hi-IN">Hindi / Hinglish</option></select>
+          <Button variant="ghost" size="icon" title={dictation.supported ? "Dictate question" : "Voice input unavailable in this browser"} aria-label={dictation.listening ? "Stop dictation" : "Dictate question"} aria-pressed={dictation.listening} onClick={() => dictation.listening ? dictation.stop() : dictation.start(VOICE_LANGUAGE)} className={cn("rounded-full text-muted-foreground", dictation.listening && "bg-risk-soft text-risk")}>{dictation.listening ? <Square /> : <Mic />}</Button>
           </div>
           <input ref={fileRef} type="file" multiple hidden onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
           <Button className="rounded-full px-5" disabled={!q.trim() || (!auto && audience.length === 0)} onClick={submit}><Send className="size-4" />Ask research</Button>

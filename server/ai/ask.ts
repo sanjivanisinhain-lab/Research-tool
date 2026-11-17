@@ -8,7 +8,7 @@ import { attachmentsText, looksLikeScript } from "../attachments";
 import { reviewScript } from "./script";
 import { planStudy, wantsStudyPlan } from "./plan";
 import { ftsQuery, searchEvidence, type Hit } from "../search";
-import { evidenceLines, gatherEvidence, overviewNote, searchScope, stripEvidenceMarkers, type Scope } from "../retrieve";
+import { evidenceLines, gatherEvidence, overviewNote, searchScope, stripEvidenceMarkers, type Gathered, type Scope } from "../retrieve";
 import type { Answer, Attachment, AudienceRef, ClaimLabel, ComparisonColumn, FollowUp, Implications, Pattern, Role } from "../../src/types/research";
 
 
@@ -25,23 +25,25 @@ const SYS_ANSWER = `You answer a product team's question about a user audience u
 - implications: for each role, keep / change / watch (one short sentence each; designer, researcher, pm, marketing, cx, other).
 - headline: a direct answer in under 12 words. It MUST agree with your own signals: if most relevant participants signal negative, the headline says the likely reaction is negative (and vice versa); only say "mixed" if the signals are genuinely split. summary: 1-3 sentences, also consistent with the signals. Quote nothing yourself; quotes are shown separately.
 - Items marked [overview] are a general sample of the audience's research, not matched to your question: use them for broad questions (typical behaviour, habits) by summarising the recurring themes they show; for a specific question they are not evidence unless they actually address it.
+- coverage: "direct" if the evidence speaks to what was actually asked; "general" if it only gives related background (for example the question is about one specific feature or situation and the evidence is about shopping habits in general). When "general", coverage_note is one plain sentence saying what the research does not cover. Be strict: do not say "direct" just because the topic is nearby.
+- Write for busy people who are not researchers: short everyday words, no jargon, no research or AI terms.
 - Be tentative when the evidence is thin.`;
 
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };
 const SCHEMA_ANSWER = { type: "OBJECT", properties: {
-  headline: { type: "STRING" }, summary: { type: "STRING" },
+  headline: { type: "STRING" }, summary: { type: "STRING" }, coverage: { type: "STRING", enum: ["direct", "general"] }, coverage_note: { type: "STRING" },
   signals: { type: "ARRAY", items: { type: "OBJECT", properties: { evidence_id: { type: "INTEGER" }, signal: { type: "STRING", enum: ["positive", "negative", "neutral"] } }, required: ["evidence_id", "signal"] } },
   patterns: { type: "ARRAY", items: { type: "OBJECT", properties: { title: { type: "STRING" }, summary: { type: "STRING" }, signal: { type: "STRING", enum: ["strong", "mixed", "risk"] }, label: { type: "STRING", enum: ["evidence", "inference", "no_evidence"] }, evidence_ids: { type: "ARRAY", items: { type: "INTEGER" } } }, required: ["title", "summary", "signal", "label", "evidence_ids"] } },
   conflict: { type: "OBJECT", nullable: true, properties: { title: { type: "STRING" }, body: { type: "STRING" }, evidence_ids: { type: "ARRAY", items: { type: "INTEGER" } } } },
   unknowns: { type: "ARRAY", items: { type: "OBJECT", properties: { title: { type: "STRING" }, body: { type: "STRING" } }, required: ["title", "body"] } },
   implications: { type: "OBJECT", properties: Object.fromEntries(ROLES.map((r) => [r, imp])), required: ROLES },
-}, required: ["headline", "summary", "signals", "patterns", "unknowns", "implications"] };
+}, required: ["headline", "summary", "coverage", "signals", "patterns", "unknowns", "implications"] };
 
 const SYS_REWRITE = `Rewrite the draft headline and summary so they agree with the computed finding. The headline (under 12 words) states the likely direction plainly. Keep the nuance (the minority view, conditions) in the summary. Add no new facts, numbers or claims beyond the draft.`;
 const SCHEMA_REWRITE = { type: "OBJECT", properties: { headline: { type: "STRING" }, summary: { type: "STRING" } }, required: ["headline", "summary"] };
 
 type Raw = {
-  headline: string; summary: string; signals: { evidence_id: number; signal: Signal }[];
+  headline: string; summary: string; coverage?: "direct" | "general"; coverage_note?: string; signals: { evidence_id: number; signal: Signal }[];
   patterns: { title: string; summary: string; signal: "strong" | "mixed" | "risk"; label: ClaimLabel; evidence_ids: number[] }[];
   conflict?: { title: string; body: string; evidence_ids: number[] } | null;
   unknowns: { title: string; body: string }[]; implications: Implications;
@@ -61,8 +63,8 @@ const statusesOf = (o: { includeUnreviewed?: boolean }) => (o.includeUnreviewed 
 const toConfidence = (c: ReturnType<typeof computeConfidence>): Answer["confidence"] => ({ score: c.score, label: c.label, participants: c.participants, factors: c.factors, methodStatus: c.methodStatus });
 
 /** Retrieve evidence for one audience, have the AI cite and label it, then compute confidence in code and verify every citation. */
-async function assessAudience(db: Db, ai: AiProvider, o: { question: string; scope: Scope; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date }): Promise<Assessed> {
-  const gathered = gatherEvidence(db, { scope: o.scope, participants: audienceParticipants(db, o.audience), statuses: statusesOf(o), limit: 40 });
+async function assessAudience(db: Db, ai: AiProvider, o: { question: string; scope: Scope; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date; gathered?: Gathered; context?: string }): Promise<Assessed> {
+  const gathered = o.gathered ?? gatherEvidence(db, { scope: o.scope, participants: audienceParticipants(db, o.audience), statuses: statusesOf(o), limit: 40 });
   const hits = gathered.hits;
   if (!hits.length) {
     const conf = computeConfidence([], o.now);
@@ -70,7 +72,7 @@ async function assessAudience(db: Db, ai: AiProvider, o: { question: string; sco
   }
   const byId = new Map(hits.map((h) => [h.id, h]));
   const raw = await ai.generateJson<Raw>({ system: SYS_ANSWER, schema: SCHEMA_ANSWER,
-    prompt: `Question: ${o.question}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` });
+    prompt: `${o.context ? o.context + "\n" : ""}Question: ${o.question}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` });
   // Integrity: only signals on retrieved evidence count; confidence is computed here, not by the model.
   const seen = new Set<number>();
   const items = (raw.signals ?? []).filter((x) => byId.has(x.evidence_id) && !seen.has(x.evidence_id) && seen.add(x.evidence_id))
@@ -103,6 +105,16 @@ function save(db: Db, result: Answer, includeUnreviewed?: boolean) {
   audit(db, "answer", { id: result.id, variant: result.variant, participants: result.confidence.participants, score: result.confidence.score });
 }
 
+type Base = Pick<Answer, "id" | "question" | "audience" | "savedAt" | "evidenceStatus"> & { autoAudience?: boolean };
+/** Turn an assessed audience into the answer people see: none, too thin to predict, or a normal answer (with a flag when it is only general background). */
+function composeAnswer(base: Base, a: Assessed): Answer {
+  if (a.empty) return insufficient(base, a.confidence, "We don't have research that speaks to this question for this audience.");
+  if (a.conf.withheld) return { ...insufficient(base, a.confidence, "The evidence we have is too thin to predict a reaction."), known: a.patterns.map((p) => ({ title: p.title, body: p.summary, label: p.label, evidenceIds: p.evidenceIds })), unknowns: a.raw.unknowns ?? [], sources: a.sources, implications: a.implications, evidenceStances: a.evidenceStances };
+  const general = a.raw.coverage === "general";
+  return { ...base, variant: "standard", headline: a.raw.headline, summary: a.raw.summary, direction: a.conf.direction, confidence: a.confidence, sources: a.sources, patterns: a.patterns, conflict: a.conflict, evidenceStances: a.evidenceStances, unknowns: a.raw.unknowns ?? [], implications: a.implications,
+    ...(general ? { coverage: "general" as const, coverageNote: (a.raw.coverage_note ?? "").trim() || "The research we have only covers this in general terms." } : {}) };
+}
+
 export async function answerQuestion(db: Db, ai: AiProvider, opts: AskOpts): Promise<Answer> {
   // A pasted/attached research script is reviewed, not answered as a question about users.
   const scriptText = await attachmentsText(opts.attachments);
@@ -125,14 +137,7 @@ export async function answerQuestion(db: Db, ai: AiProvider, opts: AskOpts): Pro
   const audience = auto ? scope.audience ?? [] : opts.audience;
   Object.assign(base, { audience, ...(auto ? { autoAudience: true } : {}) });
   const a = await assessAudience(db, ai, { question: opts.question, scope, audience, includeUnreviewed: opts.includeUnreviewed, now: opts.now });
-  let result: Answer;
-  if (a.empty) {
-    result = insufficient(base, a.confidence, "We don't have research that speaks to this question for this audience.");
-  } else if (a.conf.withheld) {
-    result = { ...insufficient(base, a.confidence, "The evidence we have is too thin to predict a reaction."), known: a.patterns.map((p) => ({ title: p.title, body: p.summary, label: p.label, evidenceIds: p.evidenceIds })), unknowns: a.raw.unknowns ?? [], sources: a.sources, implications: a.implications, evidenceStances: a.evidenceStances };
-  } else {
-    result = { ...base, variant: "standard", headline: a.raw.headline, summary: a.raw.summary, direction: a.conf.direction, confidence: a.confidence, sources: a.sources, patterns: a.patterns, conflict: a.conflict, evidenceStances: a.evidenceStances, unknowns: a.raw.unknowns ?? [], implications: a.implications };
-  }
+  const result = composeAnswer(base, a);
   save(db, result, opts.includeUnreviewed);
   return result;
 }
@@ -193,14 +198,7 @@ export async function compareAudiences(db: Db, ai: AiProvider, opts: AskOpts): P
   return result;
 }
 
-const SYS_FOLLOW = `You answer a follow-up question about a user audience using ONLY the numbered evidence below, in the context of the earlier answer. Never use outside knowledge.
-- reply: 1-4 sentences. Cite nothing in prose; list the evidence numbers you relied on in evidence_ids.
-- label: "evidence" if the reply rests directly on cited evidence; "inference" if it goes beyond what the evidence says (say so in the reply); "no_evidence" if the evidence does not address the question (then say what we don't know).
-- Items marked [overview] are a general sample of the audience's research: use them for broad questions by summarising recurring themes; they are not evidence for a specific question they do not address.
-- If fewer than 5 participants support the reply, sound tentative.`;
-const SCHEMA_FOLLOW = { type: "OBJECT", properties: { reply: { type: "STRING" }, label: { type: "STRING", enum: ["evidence", "inference", "no_evidence"] }, evidence_ids: { type: "ARRAY", items: { type: "INTEGER" } } }, required: ["reply", "label", "evidence_ids"] };
-
-/** Answer a follow-up inside an existing answer's audience and evidence scope, and append it to that answer. */
+/** Answer a follow-up the same way as a first question (headline, patterns, confidence), inside the earlier answer's audience, and append it to that answer. */
 export async function followUp(db: Db, ai: AiProvider, answerId: string, question: string, now = new Date()): Promise<FollowUp | null> {
   const row = db.prepare("SELECT answer_json j, includes_unreviewed u FROM answers WHERE id=?").get(answerId) as { j: string; u: number } | undefined;
   if (!row) return null;
@@ -209,27 +207,22 @@ export async function followUp(db: Db, ai: AiProvider, answerId: string, questio
   const members = audienceParticipants(db, answer.audience); const statuses = statusesOf({ includeUnreviewed: !!row.u });
   // Search on the follow-up's own terms first; use the earlier question's context only when the follow-up itself has
   // nothing searchable (e.g. "why?"), and the audience overview when the question is broad and keywords find little.
-  let gathered = ftsQuery(sc.terms)
-    ? gatherEvidence(db, { scope: sc, participants: members, statuses, limit: 25 })
-    : gatherEvidence(db, { scope: { ...sc, terms: [answer.question] }, participants: members, statuses, limit: 25 });
+  const scope: Scope = ftsQuery(sc.terms) ? sc : { ...sc, terms: [answer.question] };
+  let gathered = gatherEvidence(db, { scope, participants: members, statuses, limit: 25 });
   const own = gathered.hits.filter((h) => !h.overview);
   if (own.length > 0 && own.length < 3) { // a thin result: pad with the earlier question's evidence
     const more = searchEvidence(db, { terms: [answer.question], participants: members, statuses, limit: 25 }).filter((h) => !gathered.hits.some((o) => o.id === h.id));
     gathered = { ...gathered, hits: [...gathered.hits, ...more].slice(0, 40) };
   }
-  const hits = gathered.hits;
-  let fu: FollowUp;
-  const base = { id: "fu-" + crypto.randomBytes(4).toString("hex"), question, createdAt: now.toISOString() };
-  if (!hits.length) {
-    fu = { ...base, reply: "We don't have research that speaks to this for this audience. A direct study would be needed to answer it.", label: "no_evidence", evidenceIds: [] };
-  } else {
-    const byId = new Map(hits.map((h) => [h.id, h]));
-    const out = await ai.generateJson<{ reply: string; label: ClaimLabel; evidence_ids: number[] }>({ system: SYS_FOLLOW, schema: SCHEMA_FOLLOW,
-      prompt: `Earlier question: ${answer.question}\nEarlier answer: ${answer.headline}. ${answer.summary}\nFollow-up: ${question}\nAudience: ${answer.audience.map((a) => a.name).join(" + ") || "All users"}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` });
-    const ids = [...new Set(out.evidence_ids ?? [])].filter((i) => byId.has(i)).map(String);
-    const label: ClaimLabel = out.label === "evidence" && !ids.length ? "inference" : out.label; // uncited "evidence" is downgraded
-    fu = { ...base, reply: stripEvidenceMarkers(out.reply), label, evidenceIds: ids };
-  }
+  const id = "fu-" + crypto.randomBytes(4).toString("hex");
+  const a = await assessAudience(db, ai, { question, scope, audience: answer.audience, includeUnreviewed: !!row.u, now, gathered,
+    context: `This is a follow-up in a conversation. Earlier question: ${answer.question}\nEarlier answer: ${answer.headline}. ${answer.summary}` });
+  const full = composeAnswer({ id, question, audience: answer.audience, savedAt: now.toISOString(), evidenceStatus: row.u ? "includes_unreviewed" : "approved_only" }, a);
+  const cited = [...new Set([...full.patterns.flatMap((p) => p.evidenceIds), ...(full.conflict?.evidenceIds ?? []), ...(full.known ?? []).flatMap((k) => k.evidenceIds ?? [])])];
+  const label: ClaimLabel = full.variant !== "standard" ? "no_evidence" : full.patterns.some((p) => p.label === "evidence") ? "evidence" : "inference";
+  const fu: FollowUp = { id, question, createdAt: now.toISOString(), reply: stripEvidenceMarkers(full.variant === "standard" ? `${full.headline.replace(/[.!?]+$/, "")}. ${full.summary}` : full.summary), label, evidenceIds: cited, answer: full };
+  // Evidence cited only here still needs a stance (supports / contradicts) when it is opened from this conversation.
+  answer.evidenceStances = { ...(full.evidenceStances ?? {}), ...(answer.evidenceStances ?? {}) };
   answer.followUps = [...(answer.followUps ?? []), fu];
   db.prepare("UPDATE answers SET answer_json=? WHERE id=?").run(JSON.stringify(answer), answerId);
   audit(db, "followup", { answerId, label: fu.label, cited: fu.evidenceIds.length });

@@ -19,6 +19,7 @@ import { createLink, listLinks, sheetRefs, sheetRow, sheetView, syncSheet } from
 import { addNamesToTerms } from "./sheetsHub";
 import { clearPending, loadPending } from "./sheetsFile";
 import { fetchFigmaFrames, FigmaError, type FigmaFetch } from "./figma";
+import { rewordAudiences } from "./ai/personas";
 import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
@@ -117,6 +118,11 @@ export function createApp(db: Db, opts: AppOpts = {}) {
         .map((j) => ({ id: j.id, status: j.status, note: j.note, createdAt: j.createdAt, study: (JSON.parse(j.payload) as { study: string }).study })),
       aiConfigured: !!opts.ai,
     });
+  });
+  app.post("/api/admin/audiences/reword", aiLimit, async (req, res) => {
+    if (!opts.ai) return res.status(503).json({ error: "AI provider not configured (set GEMINI_API_KEY)" });
+    try { res.json(await rewordAudiences(db, opts.ai)); }
+    catch (e) { const m = (e as Error).message; console.error("reword failed:", m); res.status(/no segments/.test(m) ? 422 : 502).json({ error: /no segments/.test(m) ? m : "Rewording failed. Try again in a minute." }); }
   });
   app.post("/api/admin/jobs/rebuild-audiences", (req, res) => {
     const approved = (db.prepare("SELECT COUNT(*) n FROM evidence WHERE status='approved'").get() as { n: number }).n;

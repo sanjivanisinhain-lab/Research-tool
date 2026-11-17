@@ -97,6 +97,7 @@ export type FollowUp = {
   label: ClaimLabel;
   evidenceIds: string[];
   createdAt: string;
+  answer?: Answer; // the reply in the same form as a first answer: headline, patterns, confidence
 };
 
 export type AnswerVariant = "standard" | "study_plan" | "insufficient" | "script_review" | "comparison";
@@ -106,6 +107,8 @@ export type Answer = {
   question: string;
   audience: AudienceRef[];
   autoAudience?: boolean; // the audience was chosen from the question, not by the user
+  coverage?: "general"; // set when the research only covers the question in general terms, not directly
+  coverageNote?: string; // what the research does not cover
   variant: AnswerVariant;
   headline: string;
   summary: string;

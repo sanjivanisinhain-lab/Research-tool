@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { openDb } from "../db";
-import { synthesise } from "../ai/personas";
+import { rewordAudiences, synthesise } from "../ai/personas";
 import { MockProvider } from "../ai/provider";
 
 function seed() {
@@ -37,5 +37,35 @@ describe("synthesis", () => {
     await expect(synthesise(empty, new MockProvider(responder))).rejects.toThrow(/approved evidence/);
     const db = seed();
     expect((await synthesise(db, new MockProvider(responder), { includePending: true })).includesUnreviewed).toBe(true);
+  });
+});
+
+describe("plain wording", () => {
+  it("asks for everyday words when it defines groups and writes traits", async () => {
+    const systems: string[] = [];
+    await synthesise(seed(), new MockProvider((req: any) => { systems.push(req.system); return responder(req); }));
+    for (const key of ["define user SEGMENTS", "evidence-backed traits"]) expect(systems.find((x) => x.includes(key))).toMatch(/not researchers/);
+  });
+  it("says existing groups again in simple words without touching members, evidence or conversations", async () => {
+    const db = seed();
+    await synthesise(db, new MockProvider(responder));
+    const seg = db.prepare("SELECT id FROM segments").get() as { id: string }; const per = db.prepare("SELECT id, name FROM personas").get() as { id: string; name: string };
+    db.prepare("INSERT INTO persona_messages(id,user_id,persona_id,persona_name,sender,text,created_at) VALUES ('m1','u',?,?,'user','hi','x')").run(per.id, per.name);
+    const seen: string[] = [];
+    const ai = new MockProvider((req: any) => {
+      seen.push(req.system);
+      if (req.system.includes("names and descriptions")) return { items: req.prompt.includes("typical people") ? [{ id: per.id, name: "People who want to see the product before paying", description: "They pay cash on delivery." }, { id: "PER-invented", name: "x", description: "y" }] : [{ id: seg.id, name: "Pay cash on delivery", description: "They hand over cash when it arrives." }, { id: seg.id, name: "dup", description: "dup" }] };
+      return { traits: [{ id: 1, text: "They do not trust paying first." }, { id: 9999, text: "invented" }, { id: 2, text: "" }] };
+    });
+    const r = await rewordAudiences(db, ai);
+    expect(r).toEqual({ groups: 2, statements: 1 });
+    expect(db.prepare("SELECT name, characteristic FROM segments").get()).toEqual({ name: "Pay cash on delivery", characteristic: "They hand over cash when it arrives." });
+    expect(db.prepare("SELECT name FROM personas").get()).toEqual({ name: "People who want to see the product before paying" });
+    expect(db.prepare("SELECT persona_name FROM persona_messages").get()).toEqual({ persona_name: "People who want to see the product before paying" });
+    expect(db.prepare("SELECT text FROM persona_traits WHERE id=1").get()).toEqual({ text: "They do not trust paying first." });
+    expect(db.prepare("SELECT COUNT(*) n FROM persona_participants").get()).toEqual({ n: 3 }); // members unchanged
+    expect(db.prepare("SELECT COUNT(*) n FROM persona_trait_evidence").get()).toEqual({ n: 2 }); // evidence links unchanged
+    expect(seen.every((x) => /not researchers/.test(x))).toBe(true);
+    await expect(rewordAudiences(openDb(":memory:"), ai)).rejects.toThrow(/no segments/);
   });
 });

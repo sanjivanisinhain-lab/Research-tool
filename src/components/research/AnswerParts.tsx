@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ArrowUp, BookOpen, HelpCircle, Paperclip, ShieldAlert, Check, RefreshCw, Eye } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ArrowRight, ArrowUp, HelpCircle, Paperclip, ShieldAlert, Check, RefreshCw, Eye } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { Answer, EvidenceItem, FollowUp, Implication, Pattern, Role } from "@/types/research";
+import type { Answer, EvidenceItem, Implication, Pattern, Role } from "@/types/research";
 import { ROLE_LENS } from "@/lib/roleLens";
 import { cn } from "@/lib/utils";
 import { CitationChip, ClaimTag, Eyebrow, SignalPill, signalDot } from "./primitives";
@@ -136,39 +136,6 @@ export function NextActions({ actions }: { actions: { label: string; onClick?: (
 }
 
 /** Follow-ups as a chat: your question on the right, the reply on the left with its label and an evidence link. */
-export function FollowUpThread({ followUps, pendingText, error }: { followUps: FollowUp[]; pendingText: string | null; error?: string | null }) {
-  const drawer = useEvidenceDrawer();
-  const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [followUps.length, pendingText]);
-  if (!followUps.length && !pendingText && !error) return null;
-  return (
-    <section className="mt-12" aria-label="Follow-up conversation">
-      <Eyebrow>Follow-up conversation</Eyebrow>
-      <div className="mt-4 space-y-4">
-        {followUps.map((f) => (
-          <div key={f.id} className="space-y-3">
-            <div className="ml-auto max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground">{f.question}</div>
-            <div className="max-w-[88%]">
-              <div className="rounded-2xl rounded-bl-md border border-persona/15 bg-persona-soft/40 px-4 py-3">
-                <div className="mb-1.5"><ClaimTag label={f.label} /></div>
-                <p className="leading-relaxed">{f.reply}</p>
-              </div>
-              {f.evidenceIds.length > 0 && <button type="button" onClick={() => drawer.open(f.evidenceIds)} className="mt-1.5 inline-flex items-center gap-1.5 px-1 text-xs font-medium text-persona hover:underline"><BookOpen className="size-3.5" />Evidence behind this response</button>}
-            </div>
-          </div>
-        ))}
-        {pendingText && (
-          <div className="space-y-3">
-            <div className="ml-auto max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground">{pendingText}</div>
-            <div className="flex gap-1 px-2" role="status" aria-label="Looking through the research">{[0, 1, 2].map((i) => <span key={i} className="size-2 animate-pulse rounded-full bg-persona/60" style={{ animationDelay: `${i * 150}ms` }} />)}</div>
-          </div>
-        )}
-        {error && <p role="alert" className="text-sm text-risk">{error}</p>}
-        <div ref={end} />
-      </div>
-    </section>
-  );
-}
 
 export function FollowUpComposer({ onSend, pending, inputId = "follow-up" }: { onSend: (t: string) => void; pending?: boolean; inputId?: string }) {
   const [text, setText] = useState("");
@@ -187,7 +154,7 @@ export function FollowUpComposer({ onSend, pending, inputId = "follow-up" }: { o
           rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
           placeholder="Ask a follow-up…"
           className="max-h-32 min-h-10 flex-1 resize-none bg-transparent py-2 text-base outline-none placeholder:text-muted-foreground"
         />

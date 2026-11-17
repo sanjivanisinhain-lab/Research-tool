@@ -207,6 +207,7 @@ function StatusStrip() {
   const qc = useQueryClient();
   const jobs = useQuery({ queryKey: ["admin", "jobs"], queryFn: adminApi.jobs, refetchInterval: 4000 });
   const rebuild = useMutation({ mutationFn: adminApi.rebuildAudiences, onSuccess: () => qc.invalidateQueries({ queryKey: ["admin"] }) });
+  const reword = useMutation({ mutationFn: adminApi.rewordAudiences, onSuccess: () => qc.invalidateQueries() });
   const retry = useMutation({ mutationFn: adminApi.retryJob, onSuccess: () => qc.invalidateQueries({ queryKey: ["admin"] }) });
   const n = (s: string) => jobs.data?.counts.find((c) => c.status === s)?.n ?? 0;
   const busy = n("queued") + n("running");
@@ -216,10 +217,15 @@ function StatusStrip() {
         <span className="flex items-center gap-2">{busy > 0 ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4 text-strong" />}{busy > 0 ? `Working on ${busy} task${busy === 1 ? "" : "s"} (transcribing and reading)` : "AI is idle"}</span>
         <span className="text-muted-foreground">{n("done")} done{n("failed") > 0 && <> · <span className="font-medium text-risk">{n("failed")} failed</span></>}</span>
         {jobs.data && !jobs.data.aiConfigured && <span className="font-medium text-risk">AI key not set: reading is paused</span>}
-        <Button variant="outline" size="sm" className="ml-auto rounded-full" disabled={rebuild.isPending || busy > 0} onClick={() => rebuild.mutate()}>
+        <Button variant="outline" size="sm" className="ml-auto rounded-full" disabled={reword.isPending || busy > 0} onClick={() => reword.mutate()} title="Say the names and descriptions of the groups again in simple words. Nothing else changes.">
+          {reword.isPending ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Check className="mr-1.5 size-3.5" />}Make wording simpler
+        </Button>
+        <Button variant="outline" size="sm" className="rounded-full" disabled={rebuild.isPending || busy > 0} onClick={() => rebuild.mutate()}>
           <RefreshCw className="mr-1.5 size-3.5" />Rebuild audiences
         </Button>
       </div>
+      {reword.isError && <p className="mt-2 text-xs text-risk">{(reword.error as Error).message}</p>}
+      {reword.isSuccess && <p className="mt-2 text-xs text-muted-foreground">Done: {reword.data.groups} group names and {reword.data.statements} statements are now in simpler words.</p>}
       {rebuild.isError && <p className="mt-2 text-xs text-risk">{(rebuild.error as Error).message}</p>}
       {rebuild.isSuccess && <p className="mt-2 text-xs text-muted-foreground">Rebuilding segments and personas from approved evidence. This takes a few minutes.</p>}
       {jobs.data?.recentFailures.slice(0, 3).map((f) => (

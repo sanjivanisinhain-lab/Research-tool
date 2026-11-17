@@ -44,7 +44,7 @@ function PersonaChat() {
 
   return (
     <div>
-      <PageHeader eyebrow="Persona conversation" title="Explore a perspective, without pretending it's a person." sub="Responses simulate a behavioural profile grounded in research. Inspect evidence when available." />
+      <PageHeader eyebrow="Persona conversation" title="Talk to a typical person from the research." sub="This is not a real person. Answers imitate someone typical, using only what the research says. Open the evidence to check any answer." />
       <div className="mb-6"><PersonaChips selected={[pid]} onSelect={(p) => { if (!send.isPending) setPid(p.id); }} /></div>
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         <div>
@@ -72,7 +72,7 @@ function PersonaChat() {
             <div className="mb-3 flex flex-wrap gap-2">{SUGGESTED.map((s) => <button key={s} onClick={() => go(s)} className="rounded-full border px-3 py-1.5 text-sm hover:border-foreground/40">{s}</button>)}</div>
             <div className="flex items-end gap-2 rounded-2xl border bg-background p-2 pl-4">
               <label htmlFor="pmsg" className="sr-only">Message</label>
-              <textarea id="pmsg" rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(text); } }} placeholder={`Ask ${current.name}…`} className="min-h-10 flex-1 resize-none bg-transparent py-2 outline-none" />
+              <textarea id="pmsg" rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); go(text); } }} placeholder={`Ask ${current.name}…`} className="min-h-10 flex-1 resize-none bg-transparent py-2 outline-none" />
               <Button size="icon" className="rounded-xl" disabled={!text.trim() || send.isPending} onClick={() => go(text)} aria-label="Send"><ArrowUp className="size-4" /></Button>
             </div>
             {send.isError && <p role="alert" className="mt-2 text-sm text-risk">{(send.error as Error).message}</p>}

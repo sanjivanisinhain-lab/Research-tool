@@ -1,7 +1,7 @@
-import { useMemo } from "react";
-import { Copy, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
+import { Copy, CheckCircle2, AlertTriangle, XCircle, ChevronDown, BookOpen } from "lucide-react";
 import { toast } from "sonner";
-import type { Answer, EvidenceItem, Role } from "@/types/research";
+import type { Answer, EvidenceItem, FollowUp, Role } from "@/types/research";
 import { useEvidence } from "@/api/hooks";
 import { shouldWithhold } from "@/config/confidence";
 import { cn } from "@/lib/utils";
@@ -25,18 +25,22 @@ export function allEvidenceIds(a: Answer) {
   ];
 }
 
-export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest, onReviewQuestions }: { answer: Answer; role: Role; onFollowUp: () => void; onCompare: () => void; onPlanTest: () => void; onReviewQuestions?: () => void }) {
+export function AnswerView({ answer, role, onFollowUp = () => {}, onCompare = () => {}, onPlanTest = () => {}, onReviewQuestions, embedded = false }: { answer: Answer; role: Role; onFollowUp?: () => void; onCompare?: () => void; onPlanTest?: () => void; onReviewQuestions?: () => void; embedded?: boolean }) {
   const ids = useMemo(() => allEvidenceIds(answer), [answer]);
   const ev = useEvidence(ids);
   const map = useMemo(() => new Map<string, EvidenceItem>((ev.data ?? []).map((e) => [e.id, e])), [ev.data]);
   const participants = answer.confidence.participants;
+  // When the research only covers the question in general terms, say that first. The general summary is there, one click away.
+  const general = answer.variant === "standard" && answer.coverage === "general";
+  const [showGeneral, setShowGeneral] = useState(false);
 
   return (
     <div>
-      <AnswerHero answer={answer} />
+      {general ? <NoDirectEvidence answer={answer} open={showGeneral} onToggle={() => setShowGeneral((o) => !o)} /> : <AnswerHero answer={answer} />}
 
-      {answer.variant === "standard" && (
-        <>
+      {answer.variant === "standard" && (!general || showGeneral) && (
+        <div id="general-summary" className={cn(general && "mt-6 rounded-2xl border bg-card p-5 md:p-6")}>
+          {general && <AnswerHero answer={answer} />}
           <div className="mt-8"><MetricsCard direction={answer.direction} confidence={answer.confidence} /></div>
           <Section eyebrow="What the evidence says" title={`${["No", "One", "Two", "Three", "Four", "Five"][answer.patterns.length] ?? answer.patterns.length} patterns explain the finding`} right={`${answer.sources} sources · ${participants} participants`}>
             <div>{answer.patterns.map((p) => <SignalPattern key={p.id} pattern={p} evidence={map} />)}</div>
@@ -46,7 +50,7 @@ export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest, on
             {answer.conflict && <ConflictCard {...answer.conflict} />}
             {answer.unknowns.map((u) => <UnknownCard key={u.title} {...u} />)}
           </div>
-        </>
+        </div>
       )}
 
       {answer.variant === "study_plan" && answer.studyPlan && <StudyPlanBody answer={answer} map={map} />}
@@ -54,9 +58,9 @@ export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest, on
       {answer.variant === "script_review" && answer.scriptReview && <ScriptReviewBody answer={answer} map={map} />}
       {answer.variant === "comparison" && answer.comparison && <ComparisonBody answer={answer} />}
 
-      {answer.variant !== "insufficient" && <DesignImplications implication={answer.implications[role]} role={role} />}
+      {answer.variant !== "insufficient" && (!general || showGeneral) && <DesignImplications implication={answer.implications[role]} role={role} />}
 
-      <NextActions
+      {!embedded && <NextActions
         actions={
           answer.variant === "insufficient"
             ? [{ label: "Build test plan", primary: true, onClick: onPlanTest }, { label: "Ask follow-up", onClick: onFollowUp }]
@@ -66,7 +70,20 @@ export function AnswerView({ answer, role, onFollowUp, onCompare, onPlanTest, on
               ? [{ label: "Ask follow-up", primary: true, onClick: onFollowUp }, { label: "Plan usability test", onClick: onPlanTest }]
               : [{ label: "Ask follow-up", primary: true, onClick: onFollowUp }, { label: "Compare audience", onClick: onCompare }, { label: "Plan usability test", onClick: onPlanTest }]
         }
-      />
+      />}
+    </div>
+  );
+}
+
+function NoDirectEvidence({ answer, open, onToggle }: { answer: Answer; open: boolean; onToggle: () => void }) {
+  return (
+    <div className="rounded-2xl border border-unknown/30 bg-unknown-soft p-5 md:p-6">
+      <p className="eyebrow">No direct evidence</p>
+      <h2 className="mt-2 text-2xl font-semibold leading-tight md:text-3xl">We don't have research that speaks directly to this question.</h2>
+      {answer.coverageNote && <p className="mt-2 max-w-3xl text-lg text-muted-foreground">{answer.coverageNote}</p>}
+      <button type="button" onClick={onToggle} aria-expanded={open} aria-controls="general-summary" className="mt-4 inline-flex items-center gap-2 rounded-full border bg-card px-4 py-2 text-sm font-medium hover:border-foreground/40">
+        <ChevronDown className={cn("size-4 transition", open && "rotate-180")} />{open ? "Hide the general summary" : "Show a general summary from the research we do have"}
+      </button>
     </div>
   );
 }
@@ -286,5 +303,43 @@ function RequestPanel({ answerId }: { answerId: string }) {
         </form>
       )}
     </div>
+  );
+}
+
+export function FollowUpThread({ followUps, pendingText, error, role }: { followUps: FollowUp[]; pendingText: string | null; error?: string | null; role: Role }) {
+  const drawer = useEvidenceDrawer();
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [followUps.length, pendingText]);
+  if (!followUps.length && !pendingText && !error) return null;
+  return (
+    <section className="mt-12" aria-label="Follow-up conversation">
+      <Eyebrow>Follow-up conversation</Eyebrow>
+      <div className="mt-4 space-y-4">
+        {followUps.map((f) => (
+          <div key={f.id} className="space-y-3">
+            <div className="ml-auto max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground">{f.question}</div>
+            {f.answer ? (
+              <div className="rounded-2xl border bg-card/60 p-5 md:p-6"><AnswerView answer={f.answer} role={role} embedded /></div>
+            ) : (
+              <div className="max-w-[88%]">
+                <div className="rounded-2xl rounded-bl-md border border-persona/15 bg-persona-soft/40 px-4 py-3">
+                  <div className="mb-1.5"><ClaimTag label={f.label} /></div>
+                  <p className="leading-relaxed">{f.reply}</p>
+                </div>
+                {f.evidenceIds.length > 0 && <button type="button" onClick={() => drawer.open(f.evidenceIds)} className="mt-1.5 inline-flex items-center gap-1.5 px-1 text-xs font-medium text-persona hover:underline"><BookOpen className="size-3.5" />Evidence behind this response</button>}
+              </div>
+            )}
+          </div>
+        ))}
+        {pendingText && (
+          <div className="space-y-3">
+            <div className="ml-auto max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground">{pendingText}</div>
+            <div className="flex gap-1 px-2" role="status" aria-label="Looking through the research">{[0, 1, 2].map((i) => <span key={i} className="size-2 animate-pulse rounded-full bg-persona/60" style={{ animationDelay: `${i * 150}ms` }} />)}</div>
+          </div>
+        )}
+        {error && <p role="alert" className="text-sm text-risk">{error}</p>}
+        <div ref={end} />
+      </div>
+    </section>
   );
 }

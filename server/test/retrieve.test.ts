@@ -69,9 +69,10 @@ describe("broad questions no longer end in 'no evidence'", () => {
   it("follow-ups on a broad topic use the overview too", async () => {
     const db = seed(); const a = await answerQuestion(db, ai({ keywords: ["pinterest"], studies: [], broad: false }), { question: "how do they find outfits on Pinterest?", audience: [] });
     const seen = { prompt: "", calls: 0 };
-    const fu = new MockProvider((req) => req.system.includes("search over") ? { keywords: ["zzzz"], broad: true, studies: ["Gen Z shopping interviews"] } : (seen.prompt = req.prompt, { reply: "They keep wishlists.", label: "evidence", evidence_ids: [5, 6, 7] }));
+    const fu = new MockProvider((req) => req.system.includes("search over") ? { keywords: ["zzzz"], broad: true, studies: ["Gen Z shopping interviews"] } : (seen.prompt = req.prompt, (() => { const ids = [...req.prompt.matchAll(/#(\d+) \((P\d+),/g)].map((m) => Number(m[1])); return { headline: "They keep wishlists", summary: "s", coverage: "direct", signals: ids.map((i) => ({ evidence_id: i, signal: "positive" })), patterns: [{ title: "Wishlists", summary: "x", signal: "strong", label: "evidence", evidence_ids: ids.slice(0, 5) }], unknowns: [], implications: imps }; })()));
     const r = await followUp(db, fu, a.id, "what else is usual for them?");
     expect(seen.prompt).toContain("[overview]"); expect(r!.label).toBe("evidence");
+    expect(r!.answer).toMatchObject({ variant: "standard", headline: "They keep wishlists" }); // a follow-up is answered like a first question
   });
   it("persona chat answers 'how do you usually shop?' from the persona's research", async () => {
     const db = seed(); const seen = { prompt: "" };
@@ -107,5 +108,36 @@ describe("auto audience", () => {
     const own = [{ kind: "persona" as const, id: "PER-1", name: "Browsers", participants: 6 }];
     const b = await answerQuestion(db, ai(["Browsers"]), { question: "pinterest ideas?", audience: own, autoAudience: true, now: new Date("2026-11-10") });
     expect(b.autoAudience).toBeUndefined();
+  });
+});
+
+describe("saying so first when the research only covers a question in general terms", () => {
+  const answerAi = (coverage: "direct" | "general") => new MockProvider((req) => {
+    if (req.system.includes("search over")) return { keywords: ["pinterest"], broad: false, studies: [] };
+    const ids = [...req.prompt.matchAll(/#(\d+) \((P\d+),/g)].map((m) => Number(m[1]));
+    return { headline: "They browse for ideas", summary: "They look at Pinterest.", coverage, ...(coverage === "general" ? { coverage_note: "We have nothing on wishlists for gifts." } : {}), signals: ids.map((i) => ({ evidence_id: i, signal: "positive" })),
+      patterns: [{ title: "Ideas", summary: "x", signal: "strong", label: "evidence", evidence_ids: ids.slice(0, 5) }], unknowns: [], implications: imps };
+  });
+  it("flags a general answer, with what is missing, and leaves a direct answer unflagged", async () => {
+    const g = await answerQuestion(seed(), answerAi("general"), { question: "do they use pinterest for gifts?", audience: [], now: new Date("2026-11-10") });
+    expect(g).toMatchObject({ variant: "standard", coverage: "general", coverageNote: "We have nothing on wishlists for gifts." });
+    const d = await answerQuestion(seed(), answerAi("direct"), { question: "do they use pinterest?", audience: [], now: new Date("2026-11-10") });
+    expect(d.coverage).toBeUndefined();
+  });
+  it("answers a follow-up in the same form as a first question, and says so plainly when nothing fits", async () => {
+    const db = seed();
+    const a = await answerQuestion(db, answerAi("direct"), { question: "do they use pinterest?", audience: [], now: new Date("2026-11-10") });
+    const f = await followUp(db, answerAi("general"), a.id, "pinterest for gifts?", new Date("2026-11-10"));
+    expect(f!.answer).toMatchObject({ variant: "standard", coverage: "general", headline: "They browse for ideas" });
+    expect(f!.answer!.patterns[0]!.evidenceIds.length).toBeGreaterThan(0);
+    expect(f!.answer!.confidence).toMatchObject({ methodStatus: "computed_v1" });
+    expect(f!.evidenceIds.length).toBeGreaterThan(0);
+    const quiet = new MockProvider((req) => (req.system.includes("search over") ? { keywords: ["zzzz"], broad: false, studies: [] } : { headline: "x", summary: "x", coverage: "direct", signals: [], patterns: [], unknowns: [], implications: imps }));
+    const none = await followUp(db, quiet, a.id, "zzzz qqqq vvvv", new Date("2026-11-10"));
+    expect(none).toMatchObject({ label: "no_evidence", evidenceIds: [] });
+    expect(none!.answer).toMatchObject({ variant: "insufficient" });
+    expect(none!.reply).toMatch(/don't have research/);
+    const saved = JSON.parse((db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(a.id) as { j: string }).j);
+    expect(saved.followUps).toHaveLength(2);
   });
 });
