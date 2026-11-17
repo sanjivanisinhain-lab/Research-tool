@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../db";
 import { overviewEvidence } from "../search";
 import { answerQuestion, followUp } from "../ai/ask";
+import { planStudy } from "../ai/plan";
 import { chatWithPersona, latestPersona } from "../ai/personaChat";
 import { MockProvider } from "../ai/provider";
 import { stripEvidenceMarkers } from "../retrieve";
@@ -139,5 +140,19 @@ describe("saying so first when the research only covers a question in general te
     expect(none!.reply).toMatch(/don't have research/);
     const saved = JSON.parse((db.prepare("SELECT answer_json j FROM answers WHERE id=?").get(a.id) as { j: string }).j);
     expect(saved.followUps).toHaveLength(2);
+  });
+});
+
+describe("a study plan states how much research there really is", () => {
+  it("tells the AI the real totals, not the size of the sample it was shown", async () => {
+    const db = seed(); let system = "", prompt = "";
+    const ai = new MockProvider((req) => { system = req.system; prompt = req.prompt; return { method: "In-depth interviews", method_reason: "r", objective: "o", task: "t", watch_for: "w", questions: ["q"], well_understood: [], needs_validation: [], implications: imps }; });
+    await planStudy(db, ai, { question: "How should we test outfit ideas from pinterest?", audience: [], scope: { terms: ["pinterest"], studyIds: [], broad: false } });
+    expect(prompt).toContain("10 participants in total"); // every participant with approved evidence, not just those in the 40 items shown
+    expect(prompt).toContain("about 6 of them");
+    expect(system).toMatch(/only a SAMPLE/);
+    const own = [{ kind: "persona" as const, id: "PER-1", name: "Browsers", participants: 6 }];
+    await planStudy(db, ai, { question: "How should we test outfit ideas from pinterest?", audience: own, scope: { terms: ["pinterest"], studyIds: [], broad: false } });
+    expect(prompt).toContain("6 participants in total"); // an audience counts its own members
   });
 });

@@ -29,7 +29,8 @@ Return:
 - well_understood: findings the existing evidence already supports, each with title, body (one sentence) and evidence_ids from the list ONLY. Omit anything the evidence does not clearly support.
 - needs_validation: 2-5 things the evidence does NOT settle and the study should test, each with title, body (one sentence) and topic (4-6 keywords, English and Hinglish, used to count existing evidence).
 - implications: for each role, keep / change / watch (one short sentence).
-Never state facts about users that the evidence does not show. If there is no evidence, say everything needs validation.`;
+Never state facts about users that the evidence does not show. If there is no evidence, say everything needs validation.
+- The numbered evidence is only a SAMPLE of the research, never all of it. Never describe the size of the sample as how much research exists. When you mention how much research exists, use the totals given under "Existing research" exactly.`;
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };
 const SCHEMA = { type: "OBJECT", properties: {
   method: { type: "STRING", enum: [...METHODS] }, method_reason: { type: "STRING" }, objective: { type: "STRING" }, task: { type: "STRING" }, watch_for: { type: "STRING" },
@@ -54,8 +55,13 @@ export async function planStudy(db: Db, ai: AiProvider, o: PlanOpts): Promise<An
   const byId = new Map<number, Hit>(hits.map((h) => [h.id, h]));
   const audienceName = o.audience.map((a) => a.name).join(" + ") || "All users";
   const ctx = o.context ? `\nEarlier question: ${o.context.question}\nEarlier finding: ${o.context.headline}. ${o.context.summary}\nKnown gaps already noted: ${o.context.unknowns.map((u) => u.title).join("; ") || "none"}` : "";
+  // Real totals, counted here: the sample shown to the AI is capped, so its size says nothing about how much research exists.
+  const st = statuses.map(() => "?").join(",");
+  const everyone = (db.prepare(`SELECT DISTINCT participant_id p FROM evidence WHERE status IN (${st})`).all(...statuses) as { p: string }[]).map((r) => r.p);
+  const inAudience = members ? everyone.filter((p) => new Set(members).has(p)) : everyone;
+  const matching = new Set(searchEvidence(db, { terms: [subject, ...o.scope.terms], participants: members, statuses, limit: 1000 }).map((h) => h.participantId)).size;
   const raw = await ai.generateJson<Raw>({ system: SYS, schema: SCHEMA,
-    prompt: `What the team wants to learn: ${subject}\nAudience: ${audienceName}${ctx}\nStrength of existing evidence: ${new Set(hits.map((h) => h.participantId)).size} participant${new Set(hits.map((h) => h.participantId)).size === 1 ? "" : "s"} with anything possibly relevant (matching is loose, so the truly relevant number is lower).\n${overviewNote(gathered)}\nExisting evidence (${hits.length} items):\n` + (evidenceLines(hits) || "(none)") });
+    prompt: `What the team wants to learn: ${subject}\nAudience: ${audienceName}${ctx}\nExisting research: ${plural(inAudience.length)} in total for this audience; about ${matching} of them have evidence that matches this topic by keyword (a loose match, so the truly relevant number is lower). The numbered evidence below is only a sample of this.\n${overviewNote(gathered)}\nExisting evidence (${hits.length} items):\n` + (evidenceLines(hits) || "(none)") });
 
   // Integrity: "well understood" must cite real retrieved evidence from enough different people; otherwise it needs validation instead.
   const known: KnownItem[] = []; const needs: { title: string; body: string }[] = [];
