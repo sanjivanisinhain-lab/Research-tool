@@ -17,12 +17,13 @@ import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
 import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
 import { createLink, listLinks, sheetRefs, sheetRow, sheetView, syncSheet } from "./sheets";
 import { addNamesToTerms } from "./sheetsHub";
+import { clearPending, loadPending } from "./sheetsFile";
 import { fetchFigmaFrames, FigmaError, type FigmaFetch } from "./figma";
 import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
 import type { AudienceProfile, AudienceRef, EvidenceItem } from "../src/types/research";
 
 /** Research-team admin API. Nothing becomes usable evidence until a person approves it here. */
-export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; staticDir?: string; limits?: { aiPerHour?: number; notesPerHour?: number }; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string; figmaToken?: string; figmaFetch?: FigmaFetch; googleSheets?: SheetsClient };
+export type AppOpts = { ai?: AiProvider | null; includeUnreviewed?: boolean; termsPath?: string; auth?: AuthOpts; staticDir?: string; limits?: { aiPerHour?: number; notesPerHour?: number }; mediaDir?: string; maxMediaBytes?: number; assetsDir?: string; figmaToken?: string; figmaFetch?: FigmaFetch; googleSheets?: SheetsClient; pendingDir?: string };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const sampleStrength = (n: number) => Math.round(100 * (1 - Math.exp(-n / 10)));
@@ -31,6 +32,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   const app = express();
   app.disable("x-powered-by");
   // Bodies are small by default. Only the two routes that carry attachments or a design image accept large ones, and only after sign-in.
+  const pendingDir = opts.pendingDir ?? path.join(path.dirname(opts.termsPath ?? "data/redaction-terms.json"), "pending-sheets");
   const small = express.json({ limit: "100kb" }); const big = express.json({ limit: "25mb" });
   const carriesFiles = (req: express.Request) => req.method === "POST" && (req.path === "/api/answers" || req.path === "/api/assessments");
   app.use((req, res, next) => (carriesFiles(req) ? next() : small(req, res, next)));
@@ -84,7 +86,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const date = typeof q.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : null;
     const result = await processUpload(db, { name: filename, buf: req.body }, {
       study, product: String(q.product ?? "").slice(0, 80), kind: q.kind === "interview" ? "interview" : "cx_call", date,
-      names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), termsPath: opts.termsPath,
+      names: String(q.names ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50), termsPath: opts.termsPath, pendingDir,
     });
     const queued = result.sourcesAdded ? enqueueExtractions(db) : 0;
     audit(db, "upload.by", { by: req.user!.id, status: result.status, added: result.sourcesAdded });
@@ -399,7 +401,13 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const r = db.prepare("SELECT assessment_json j, user_id u FROM assessments WHERE id=?").get(String(req.params.id)) as { j: string; u: string | null } | undefined;
     return r && canSee(req, r.u) ? res.type("json").send(r.j) : res.status(404).end();
   });
-  // ---------- Linked Google Sheets ----------
+  // ---------- Linked Google Sheets (and sheets uploaded as files) ----------
+  const sheetClient = (linkId: string): { client: SheetsClient | null; error: string } => {
+    const l = db.prepare("SELECT spreadsheet_id s, name FROM sheet_links WHERE id=?").get(linkId) as { s: string; name: string } | undefined;
+    if (l?.s.startsWith("upload:")) { const c = loadPending(pendingDir, linkId, l.name); return { client: c, error: "The uploaded file is no longer held here. Upload it again on the Upload tab." }; }
+    return { client: opts.googleSheets ?? null, error: "Google Sheets isn't set up on the server yet." };
+  };
+  const afterSync = (linkId: string, r: { status: string }) => { if (r.status === "ok") clearPending(pendingDir, linkId); }; // the raw file is not kept once it has been read
   app.get("/api/admin/sheets", (_req, res) => res.json({ configured: !!opts.googleSheets, serviceAccountEmail: opts.googleSheets?.serviceAccountEmail ?? null, links: listLinks(db) }));
   app.post("/api/admin/sheets", async (req, res) => {
     if (!opts.googleSheets) return res.status(422).json({ error: "Google Sheets isn't set up on the server yet. Set GOOGLE_SERVICE_ACCOUNT_JSON (see docs/DEPLOY.md)." });
@@ -417,21 +425,26 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     }
   });
   app.post("/api/admin/sheets/:id/sync", async (req, res) => {
-    if (!opts.googleSheets) return res.status(422).json({ error: "Google Sheets isn't set up on the server yet." });
-    if (!db.prepare("SELECT 1 FROM sheet_links WHERE id=?").get(String(req.params.id))) return res.status(404).end();
-    res.json(await syncSheet(db, opts.googleSheets, String(req.params.id), { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}), force: req.body?.force === true, import: req.body?.import === true, withdrawOverlap: req.body?.withdrawOverlap === true }));
+    const id = String(req.params.id);
+    if (!db.prepare("SELECT 1 FROM sheet_links WHERE id=?").get(id)) return res.status(404).end();
+    const { client, error } = sheetClient(id);
+    if (!client) return res.status(422).json({ error });
+    const r = await syncSheet(db, client, id, { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}), force: req.body?.force === true, import: req.body?.import === true, withdrawOverlap: req.body?.withdrawOverlap === true });
+    afterSync(id, r);
+    res.json(r);
   });
   // Review step before a sheet of participants is imported: confirm names that were not in the Name column, or say a word is not a name.
   app.post("/api/admin/sheets/:id/names", async (req, res) => {
-    if (!opts.googleSheets) return res.status(422).json({ error: "Google Sheets isn't set up on the server yet." });
     const id = String(req.params.id);
+    const { client, error } = sheetClient(id);
+    if (!client) return res.status(422).json({ error });
     const link = db.prepare("SELECT ignored_json j FROM sheet_links WHERE id=?").get(id) as { j: string } | undefined;
     if (!link) return res.status(404).end();
     const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length >= 2 && x.length <= 60).slice(0, 200) : []);
     const names = list(req.body?.names), notNames = list(req.body?.notNames);
     if (names.length) { addNamesToTerms(opts.termsPath, names); audit(db, "sheet.names_added", { id, count: names.length, by: req.user!.id }); }
     if (notNames.length) db.prepare("UPDATE sheet_links SET ignored_json=? WHERE id=?").run(JSON.stringify([...new Set([...(JSON.parse(link.j) as string[]), ...notNames])]), id);
-    res.json(await syncSheet(db, opts.googleSheets, id, { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) })); // the report is made again with the new names removed
+    res.json(await syncSheet(db, client, id, { ...(opts.termsPath ? { termsPath: opts.termsPath } : {}) })); // the report is made again with the new names removed
   });
   app.patch("/api/admin/sheets/:id", (req, res) => {
     if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "enabled must be true or false" });

@@ -143,7 +143,9 @@ function SheetsTab() {
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Link the sheet where you keep call notes. The tool checks it every few minutes: new rows are added, edited rows are read again, and removed rows are flagged. A redacted copy is kept so anyone can open the exact row an insight came from. Names, numbers and cities never appear in it.</p>
         {!d.configured ? (
           <div className="mt-4 rounded-xl border border-dashed p-4 text-sm">
-            <p className="font-medium">One-time setup is needed on the server.</p>
+            <p className="font-medium">Google access isn't set up on the server.</p>
+            <p className="mt-1 text-muted-foreground">You can still use a sheet without it: in Google Sheets choose File, Download, Microsoft Excel, then upload that file on the Upload tab. It gets the same review and the same "View row" links. Upload the updated file whenever the sheet changes. For automatic updates, do the setup below.</p>
+            <p className="mt-3 font-medium">One-time setup for automatic updates:</p>
             <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
               <li>In Google Cloud, create a project and turn on the Google Sheets API.</li>
               <li>Create a service account and download its JSON key.</li>
@@ -171,14 +173,14 @@ function SheetsTab() {
             <li key={l.id} className="rounded-2xl border bg-card p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="flex items-center gap-2 font-semibold"><Table2 className="size-4 shrink-0" /><span className="truncate">{l.name}</span>{!l.enabled && <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-normal">Paused</span>}</p>
+                  <p className="flex items-center gap-2 font-semibold"><Table2 className="size-4 shrink-0" /><span className="truncate">{l.name}</span>{l.source === "upload" && <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-normal">Uploaded file</span>}{!l.enabled && <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-normal">Paused</span>}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{l.rows} row{l.rows === 1 ? "" : "s"}{l.removedRows ? ` · ${l.removedRows} removed from the sheet` : ""} · {l.lastSyncedAt ? `last read ${relativeTime(l.lastSyncedAt)}` : "not read yet"}</p>
                   {l.lastMessage && <p className={cn("mt-1 text-sm", l.lastStatus === "ok" ? "text-muted-foreground" : l.lastStatus === "needs_confirmation" || l.lastStatus === "preview" ? "text-mixed" : "text-risk")}>{l.lastMessage}</p>}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {l.lastStatus === "needs_confirmation" && <Button className="rounded-full" disabled={sync.isPending} onClick={() => sync.mutate({ id: l.id, force: true })}>Apply anyway</Button>}
-                  <Button variant="outline" className="rounded-full" disabled={sync.isPending} onClick={() => sync.mutate({ id: l.id })}><RefreshCw className={cn(sync.isPending && "animate-spin")} />Read now</Button>
-                  <Button variant="outline" className="rounded-full" onClick={() => toggle.mutate({ id: l.id, enabled: !l.enabled })}>{l.enabled ? "Pause" : "Resume"}</Button>
+                  {l.source === "google" && <Button variant="outline" className="rounded-full" disabled={sync.isPending} onClick={() => sync.mutate({ id: l.id })}><RefreshCw className={cn(sync.isPending && "animate-spin")} />Read now</Button>}
+                  {l.source === "google" && <Button variant="outline" className="rounded-full" onClick={() => toggle.mutate({ id: l.id, enabled: !l.enabled })}>{l.enabled ? "Pause" : "Resume"}</Button>}
                   {l.tabs.length > 0 && <Button asChild variant="outline" className="rounded-full"><Link to="/sheets/$id" params={{ id: l.id }} search={{ tab: l.tabs[0]!.title }}>View</Link></Button>}
                 </div>
               </div>
@@ -258,7 +260,7 @@ function UploadTab() {
   return (
     <div className="mt-6 grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
       <div className="space-y-4 rounded-2xl border bg-card p-5">
-        <Label text="Study name *" hint="Groups files, e.g. “Snapdeal CX calls (Nov 2026)”">
+        <Label text="Study name *" hint="Groups files, e.g. “Snapdeal CX calls (Nov 2026)”. For a participant sheet, each row's Study column is used instead, so type anything here.">
           <input list="studies" className={field} value={meta.study} onChange={set("study")} placeholder="Snapdeal CX calls" />
           <datalist id="studies">{studies.map((s) => <option key={s} value={s} />)}</datalist>
         </Label>
@@ -301,7 +303,7 @@ function UploadTab() {
 
 function ResultRow({ row }: { row: Row }) {
   const r = row.result;
-  const tone = row.error || r?.status === "failed" || r?.status === "unsupported" ? "risk" : r?.status === "partial" || r?.status === "queued" ? "mixed" : "strong";
+  const tone = row.error || r?.status === "failed" || r?.status === "unsupported" ? "risk" : r?.status === "partial" || r?.status === "queued" || r?.status === "review" ? "mixed" : "strong";
   return (
     <li className="rounded-xl border bg-card p-4 text-sm">
       <div className="flex items-center gap-3">

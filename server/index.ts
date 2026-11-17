@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { openDb } from "./db";
 import { createApp } from "./app";
 import { startWorker } from "./jobs";
@@ -22,7 +23,7 @@ try { const gc = loadGoogleCreds(process.env); if (gc) sheetsClient = new Google
 const stopWorker = startWorker(db, ai, 2000, cfg.mediaDir);
 const stopSheets = sheetsClient ? startSheetSync(db, sheetsClient, { minutes: cfg.sheetSyncMinutes, termsPath: cfg.termsPath }) : () => {};
 const app = createApp(db, {
-  ai, includeUnreviewed: cfg.includeUnreviewed, termsPath: cfg.termsPath, mediaDir: cfg.mediaDir, assetsDir: cfg.assetsDir, figmaToken: cfg.figmaToken, ...(sheetsClient ? { googleSheets: sheetsClient } : {}),
+  ai, includeUnreviewed: cfg.includeUnreviewed, termsPath: cfg.termsPath, mediaDir: cfg.mediaDir, assetsDir: cfg.assetsDir, figmaToken: cfg.figmaToken, pendingDir: path.join(cfg.dataDir, "pending-sheets"), ...(sheetsClient ? { googleSheets: sheetsClient } : {}),
   ...(cfg.staticDir ? { staticDir: cfg.staticDir } : {}), limits: { aiPerHour: cfg.rateAiPerHour, notesPerHour: cfg.rateNotesPerHour },
   auth: { allowedEmailDomains: cfg.allowedEmailDomains, ...(cfg.setupCode ? { setupCode: cfg.setupCode } : {}), cookieSecure: cfg.cookieSecure },
 });

@@ -14,7 +14,7 @@ const PII = new Set(["Name", "City", "Mobile Number"]); // shown as [removed] in
 const SHOWN_AS_REMOVED = "[removed]";
 const CELL_PREVIEW = 280; // longer cells (a whole transcript) are shortened in the grid and shown in full in the row details
 
-export type SheetLink = { id: string; name: string; spreadsheetId: string; studyName: string; product: string; enabled: boolean; lastSyncedAt: string | null; lastStatus: string | null; lastMessage: string | null; imported: boolean; preview: Preview | null; rows: number; removedRows: number; tabs: { title: string; gid: string | null }[] };
+export type SheetLink = { id: string; source: "google" | "upload"; name: string; spreadsheetId: string; studyName: string; product: string; enabled: boolean; lastSyncedAt: string | null; lastStatus: string | null; lastMessage: string | null; imported: boolean; preview: Preview | null; rows: number; removedRows: number; tabs: { title: string; gid: string | null }[] };
 export type SyncResult = { ok: boolean; status: "ok" | "error" | "needs_confirmation" | "preview"; message: string; added: number; edited: number; removed: number; linked: number; unchanged: number; preview?: Preview };
 const result = (status: SyncResult["status"], message: string, n: Partial<SyncResult> = {}): SyncResult => ({ ok: status === "ok", status, message, added: 0, edited: 0, removed: 0, linked: 0, unchanged: 0, ...n });
 
@@ -31,6 +31,17 @@ export function createLink(db: Db, o: { url: string; name: string; study?: strin
   db.prepare("INSERT INTO sheet_links(id,name,spreadsheet_id,study_name,product,created_by,created_at) VALUES (?,?,?,?,?,?,?)")
     .run(id, name, spreadsheetId, (o.study || name).trim().slice(0, 80), (o.product || "Snapdeal").trim().slice(0, 80), o.by ?? null, nowIso());
   audit(db, "sheet.link", { id, by: o.by });
+  return id;
+}
+
+/** One logical link for sheets that arrive as uploaded files; uploading an updated file updates it (rows are recognised by Participant ID). */
+export function fileLinkId(db: Db, name: string, by?: string): string {
+  const have = db.prepare("SELECT id FROM sheet_links WHERE spreadsheet_id='upload:hub'").get() as { id: string } | undefined;
+  if (have) return have.id;
+  const id = "SH-" + crypto.randomBytes(4).toString("hex");
+  const n = (name || "Uploaded research sheet").trim().slice(0, 80);
+  db.prepare("INSERT INTO sheet_links(id,name,spreadsheet_id,study_name,product,created_by,created_at) VALUES (?,?,?,?,?,?,?)").run(id, n, "upload:hub", n, "Snapdeal", by ?? null, nowIso());
+  audit(db, "sheet.file_link", { id, by });
   return id;
 }
 
@@ -187,7 +198,7 @@ export async function syncSheet(db: Db, client: SheetsClient, linkId: string, o:
 export function listLinks(db: Db): SheetLink[] {
   const rows = db.prepare("SELECT * FROM sheet_links ORDER BY created_at").all() as any[];
   return rows.map((r) => ({
-    id: r.id, name: r.name, spreadsheetId: r.spreadsheet_id, studyName: r.study_name, product: r.product, enabled: !!r.enabled,
+    id: r.id, source: String(r.spreadsheet_id).startsWith("upload:") ? "upload" : "google", name: r.name, spreadsheetId: r.spreadsheet_id, studyName: r.study_name, product: r.product, enabled: !!r.enabled,
     lastSyncedAt: r.last_synced_at, lastStatus: r.last_status, lastMessage: r.last_message, imported: !!r.imported, preview: r.preview_json ? (JSON.parse(r.preview_json) as Preview) : null,
     rows: Number((db.prepare("SELECT COUNT(*) n FROM sheet_rows WHERE link_id=? AND state='live'").get(r.id) as { n: number }).n),
     removedRows: Number((db.prepare("SELECT COUNT(*) n FROM sheet_rows WHERE link_id=? AND state='removed'").get(r.id) as { n: number }).n),
@@ -254,7 +265,7 @@ export function startSheetSync(db: Db, client: SheetsClient, o: { minutes: numbe
   const tick = async () => {
     if (busy) return; busy = true;
     try {
-      const due = db.prepare("SELECT id FROM sheet_links WHERE enabled=1 AND imported=1 AND COALESCE(last_status,'')!='needs_confirmation' AND (last_synced_at IS NULL OR last_synced_at < ?)").all(new Date(Date.now() - o.minutes * 60_000).toISOString()) as { id: string }[];
+      const due = db.prepare("SELECT id FROM sheet_links WHERE enabled=1 AND imported=1 AND spreadsheet_id NOT LIKE 'upload:%' AND COALESCE(last_status,'')!='needs_confirmation' AND (last_synced_at IS NULL OR last_synced_at < ?)").all(new Date(Date.now() - o.minutes * 60_000).toISOString()) as { id: string }[];
       for (const l of due) await syncSheet(db, client, l.id, { ...(o.termsPath ? { termsPath: o.termsPath } : {}) });
     } finally { busy = false; }
   };

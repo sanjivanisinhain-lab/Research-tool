@@ -15,7 +15,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 const json = (method: string, body?: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
 export type Redaction = { names: number; phones: number; emails: number; places: number };
-export type UploadResult = { status: "processed" | "partial" | "failed" | "unsupported" | "queued"; message: string; format?: string; sourcesAdded: number; sourcesSkipped: number; participantsAdded: number; redaction: Redaction; jobsQueued?: number };
+export type UploadResult = { status: "processed" | "partial" | "failed" | "unsupported" | "queued" | "review"; message: string; format?: string; sourcesAdded: number; sourcesSkipped: number; participantsAdded: number; redaction: Redaction; jobsQueued?: number };
 export type UploadMeta = { study: string; product: string; kind: "cx_call" | "interview"; date: string; names: string };
 export type AdminSource = { id: string; title: string; sourceType: string; origin: string; status: string; submittedBy: "research_team" | "contributor"; date: string | null; quality: string | null; language: string; redaction: Redaction; study: string; participantId: string; createdAt: string; evidence: number; pendingEvidence: number; job: string | null };
 export type TeamUser = { id: string; email: string; name: string | null; role: "admin" | "user"; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null };
@@ -35,7 +35,7 @@ export type SheetPreview = {
   warnings: string[]; overlaps: { externalId: string; kind: "transcript" | "notes"; sourceId: string; title: string; participantId: string | null; matched: string }[]; names: { word: string; count: number }[];
 };
 export type SheetSync = { ok: boolean; status: "ok" | "error" | "needs_confirmation" | "preview"; message: string; added: number; edited: number; removed: number; linked: number; unchanged: number; preview?: SheetPreview };
-export type SheetLinkInfo = { id: string; name: string; spreadsheetId: string; studyName: string; product: string; enabled: boolean; lastSyncedAt: string | null; lastStatus: "ok" | "error" | "needs_confirmation" | "preview" | null; lastMessage: string | null; imported: boolean; preview: SheetPreview | null; rows: number; removedRows: number; tabs: { title: string; gid: string | null }[] };
+export type SheetLinkInfo = { id: string; source: "google" | "upload"; name: string; spreadsheetId: string; studyName: string; product: string; enabled: boolean; lastSyncedAt: string | null; lastStatus: "ok" | "error" | "needs_confirmation" | "preview" | null; lastMessage: string | null; imported: boolean; preview: SheetPreview | null; rows: number; removedRows: number; tabs: { title: string; gid: string | null }[] };
 export type SheetsInfo = { configured: boolean; serviceAccountEmail: string | null; links: SheetLinkInfo[] };
 export type SheetRowDetail = { header: string[]; cells: string[]; row: number; tab: string; removed: boolean; participantId: string | null; externalId: string | null; quote: string | null };
 export type SheetView = { id: string; name: string; spreadsheetId: string; tab: string; gid: string | null; tabs: { title: string; gid: string | null }[]; header: string[]; from: number; rows: { row: number; cells: string[]; removed: boolean; participantId: string | null }[]; hasPrev: boolean; hasNext: boolean; lastSyncedAt: string | null };
