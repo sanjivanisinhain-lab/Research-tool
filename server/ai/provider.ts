@@ -1,4 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export type JsonRequest = { system: string; prompt: string; schema: Record<string, unknown> };
+
+/** Requests from people waiting on a screen run inside this, and skip the pacing that background reading uses to stay inside the free tier. */
+export const interactive = new AsyncLocalStorage<boolean>();
 
 export type Media = { mimeType: string; data: Buffer };
 
@@ -28,13 +33,15 @@ export class GeminiProvider implements AiProvider {
     let delay = 5000;
     const maxAttempts = media.length ? 7 : 4; // recordings are worth waiting for; busy periods usually pass
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const wait = this.last + this.minGapMs - Date.now(); // gentle pacing for the free tier
+      const wait = interactive.getStore() ? 0 : this.last + this.minGapMs - Date.now(); // gentle pacing for the free tier, for background reading only: a person waiting on an answer should not sit through it
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       this.last = Date.now();
+      const startedAt = Date.now();
       const inUrl = process.env["GEMINI_KEY_IN_URL"] === "1";
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${inUrl ? `?key=${encodeURIComponent(this.apiKey)}` : ""}`, {
         method: "POST", headers: { "Content-Type": "application/json", ...(inUrl ? {} : { "x-goog-api-key": this.apiKey }) }, body, signal: AbortSignal.timeout(media.length ? 240000 : 90000),
       });
+      if (process.env["GEMINI_TIMING"] === "1") console.log(`Gemini ${model}: ${Date.now() - startedAt} ms, status ${res.status}${interactive.getStore() ? ", waiting person" : ", background"}`); // timings only, never content
       if (res.ok) {
         const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
         const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";

@@ -11,7 +11,7 @@ import { newUploadPath } from "./ai/transcribe";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AiProvider } from "./ai/provider";
+import { interactive, type AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
 import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
@@ -41,6 +41,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
 
   app.get("/api/health", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.setHeader("X-Content-Type-Options", "nosniff"); try { db.prepare("SELECT 1").get(); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
   setupAuth(app, db, opts.auth ?? {}); // everything registered after this line requires a signed-in user
+  app.use("/api", (_req, _res, next) => interactive.run(true, next)); // AI calls made for a person waiting on a screen are not paced like background reading
 
   // Recordings are streamed to disk (they can be large) and transcribed by a background job.
   app.put("/api/admin/upload", async (req, res, next) => {

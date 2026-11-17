@@ -159,8 +159,8 @@ export async function compareAudiences(db: Db, ai: AiProvider, opts: AskOpts): P
   if (audiences.length < 2) throw new Error("Comparison needs at least two audiences");
   const id = "ans-" + crypto.randomBytes(5).toString("hex");
   const scope = await searchScope(db, ai, opts.question);
-  const assessed: Assessed[] = [];
-  for (const aud of audiences) assessed.push(await assessAudience(db, ai, { question: opts.question, scope, audience: [aud], includeUnreviewed: opts.includeUnreviewed, now: opts.now }));
+  // The audiences are independent, so they are assessed at the same time rather than one after another.
+  const assessed: Assessed[] = await Promise.all(audiences.map((aud) => assessAudience(db, ai, { question: opts.question, scope, audience: [aud], includeUnreviewed: opts.includeUnreviewed, now: opts.now })));
 
   const inconclusive = assessed.some((a) => a.empty || a.conf.withheld);
   const columns: ComparisonColumn[] = audiences.map((aud, i) => ({
