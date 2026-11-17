@@ -115,7 +115,7 @@ function SourceContext({ evidence: e, onNavigate }: { evidence: EvidenceItem; on
     {e.audio && <CxAudioPlayer evidence={e} />}
     {e.sheet && (
       <p className="mt-3 text-sm">
-        <Link to="/sheets/$id" onClick={onNavigate} params={{ id: e.sheet.linkId }} search={{ tab: e.sheet.tab, row: e.sheet.row }} className="inline-flex items-center gap-1.5 font-medium text-brand underline">
+        <Link to="/sheets/$id" onClick={onNavigate} params={{ id: e.sheet.linkId }} search={{ tab: e.sheet.tab, row: e.sheet.row, ev: Number(e.id) }} className="inline-flex items-center gap-1.5 font-medium text-brand underline">
           <Table2 className="size-4" />View row {e.sheet.row} in {e.sheet.name}
         </Link>
         {e.sheet.removed && <span className="ml-2 text-xs text-risk">This row was later removed from the sheet.</span>}

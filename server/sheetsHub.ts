@@ -127,11 +127,16 @@ export function findOverlaps(db: Db, tabs: HubTab[]): Overlap[] {
   const old = new Map<string, { title: string; p: string | null; text: string[] }>();
   for (const r of rows) { const e = old.get(r.sid) ?? { title: r.title, p: r.p, text: [] }; e.text.push(r.t); old.set(r.sid, e); }
   const index = [...old.entries()].map(([sid, e]) => ({ sid, title: e.title, p: e.p, text: norm(e.text.join(" ")) }));
+  // A stretch of text that appears in several sheet rows is a scripted question or a shared boilerplate, not evidence that a row is a copy of an earlier upload.
+  const parts = tabs.flatMap((t) => t.rows.flatMap((row) => ([["transcript", row.transcript], ["notes", row.notes]] as const).map(([kind, text]) => ({ id: row.id, kind, ps: probes(text) }))));
+  const seen = new Map<string, number>();
+  for (const x of parts) for (const p of new Set(x.ps)) seen.set(p, (seen.get(p) ?? 0) + 1);
   const out: Overlap[] = [];
-  for (const tab of tabs) for (const row of tab.rows) for (const [kind, text] of [["transcript", row.transcript], ["notes", row.notes]] as const) {
-    const ps = probes(text); if (!ps.length) continue;
+  for (const x of parts) {
+    const ps = x.ps.filter((p) => seen.get(p) === 1);
+    if (!ps.length) continue;
     const need = Math.min(2, ps.length);
-    for (const o of index) { const hit = ps.filter((p) => o.text.includes(p)).length; if (hit >= need) out.push({ externalId: row.id, kind, sourceId: o.sid, title: o.title, participantId: o.p, matched: `${hit} of ${ps.length}` }); }
+    for (const o of index) { const hit = ps.filter((p) => o.text.includes(p)).length; if (hit >= need) out.push({ externalId: x.id, kind: x.kind, sourceId: o.sid, title: o.title, participantId: o.p, matched: `${hit} of ${ps.length}` }); }
   }
   return out;
 }

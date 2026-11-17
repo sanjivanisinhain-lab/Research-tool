@@ -105,6 +105,16 @@ describe("a sheet of participants", () => {
     expect((db.prepare("SELECT COUNT(*) n FROM sources WHERE status='rejected'").get() as { n: number }).n).toBe(1); // the unrelated note is untouched
   });
 
+  it("does not mistake a scripted question shared by several interviews for a copy", async () => {
+    const SCRIPT = "Interviewer: Suppose on Saturday you have to go for a brunch with your friends and you have no outfit and no time to shop offline, so you have to order online, please walk me through exactly how you would start and what goes through your mind";
+    ingestContribution(db, `${SCRIPT}\n Participant: I would never order anything old school like that, my uncle always tells me to buy from the local market near home.`, { kind: "interview", studyName: "Old upload", submittedBy: "research_team" });
+    const a = `${SCRIPT}\n Participant: I open Myntra first, then wishlist two or three dresses, then ask my sister, then order the one with good photos and easy returns.`;
+    const b = `${SCRIPT}\n Participant: I mostly use Meesho, search for tops under five hundred rupees, check the reviews with photos and order cash on delivery only.`;
+    const t = rows(); t[1]![3] = a; t[2]![3] = b; t[2]![4] = "Transcript only";
+    const r = await syncSheet(db, fake({ "Participant hub": t }), link(), { termsPath: terms });
+    expect(r.preview!.overlaps).toEqual([]);
+  });
+
   it("keeps both when not told to withdraw", async () => {
     ingestContribution(db, TR1, { kind: "interview", studyName: "Old upload", submittedBy: "research_team", knownNames: ["Asha"] });
     const g = fake({ "Participant hub": rows() }); const id = link();

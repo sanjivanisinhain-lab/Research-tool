@@ -6,7 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { adminApi, AdminForbiddenError, type SheetLinkInfo, type AdminSource, type Redaction, type StudyRequestItem, type TeamUser, type UploadResult } from "@/api/admin";
+import { adminApi, AdminForbiddenError, type SheetLinkInfo, type SheetSync, type AdminSource, type Redaction, type StudyRequestItem, type TeamUser, type UploadResult } from "@/api/admin";
 import { EmptyState, ErrorState, LoadingBlock, PageHeader, StatusBadge, relativeTime } from "@/components/research/primitives";
 import { cn } from "@/lib/utils";
 import { authApi } from "@/api/auth";
@@ -50,6 +50,68 @@ function DataPage() {
         <TabsContent value="team"><TeamTab /></TabsContent>
         <TabsContent value="note"><NoteTab /></TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+/** The step before a sheet of participants is imported: what it holds, what overlaps earlier uploads, which names may remain. */
+function SheetReview({ link, onDone, onMessage }: { link: SheetLinkInfo; onDone: () => void; onMessage: (m: { ok: boolean; text: string }) => void }) {
+  const p = link.preview!;
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [manual, setManual] = useState("");
+  const [withdraw, setWithdraw] = useState(true);
+  const toggle = (w: string) => setPicked((s) => { const n = new Set(s); if (n.has(w)) n.delete(w); else n.add(w); return n; });
+  const names = useMutation({
+    mutationFn: (v: { names: string[]; notNames: string[] }) => adminApi.sheetNames(link.id, v.names, v.notNames),
+    onSuccess: (r: SheetSync) => { setPicked(new Set()); setManual(""); onMessage({ ok: true, text: "Updated. The report was made again." }); void r; onDone(); },
+    onError: (e: Error) => onMessage({ ok: false, text: e.message }),
+  });
+  const run = useMutation({
+    mutationFn: () => adminApi.importSheet(link.id, withdraw),
+    onSuccess: (r: SheetSync) => { onMessage({ ok: r.ok, text: r.message + (r.ok ? " When reading finishes, press Rebuild audiences." : "") }); onDone(); },
+    onError: (e: Error) => onMessage({ ok: false, text: e.message }),
+  });
+  const overlapSources = new Set(p.overlaps.map((o) => o.sourceId)).size;
+  return (
+    <div className="mt-4 space-y-5 rounded-xl border border-dashed p-4">
+      <div>
+        <p className="font-medium">Review before importing</p>
+        <p className="text-sm text-muted-foreground">Nothing has been imported yet. {p.rows} participants were found: {p.transcripts} transcripts and {p.notes} sets of notes.</p>
+        <table className="mt-3 w-full text-sm"><thead><tr className="text-left text-xs text-muted-foreground"><th className="py-1 font-medium">Study</th><th className="py-1 text-right font-medium">People</th><th className="py-1 text-right font-medium">Transcripts</th><th className="py-1 text-right font-medium">Notes</th></tr></thead>
+          <tbody>{p.perStudy.map((x) => <tr key={x.study} className="border-t"><td className="py-1.5 pr-3">{x.study}</td><td className="py-1.5 text-right tabular-nums">{x.rows}</td><td className="py-1.5 text-right tabular-nums">{x.transcripts}</td><td className="py-1.5 text-right tabular-nums">{x.notes}</td></tr>)}</tbody></table>
+        {p.warnings.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-mixed">{p.warnings.slice(0, 8).map((w, i) => <li key={i}>{w}</li>)}{p.warnings.length > 8 && <li>and {p.warnings.length - 8} more</li>}</ul>}
+      </div>
+
+      <div>
+        <p className="font-medium">Earlier uploads that hold the same text</p>
+        {p.overlaps.length === 0 ? <p className="text-sm text-muted-foreground">None found. Nobody would be counted twice.</p> : (
+          <>
+            <p className="text-sm text-muted-foreground">{overlapSources} earlier upload{overlapSources === 1 ? "" : "s"} appear to be the same as rows in this sheet. Counting both would count those people twice.</p>
+            <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-sm">{p.overlaps.slice(0, 40).map((o, i) => <li key={i} className="tabular-nums"><strong>{o.externalId}</strong> ({o.kind}) matches earlier {o.participantId ?? "upload"} · {o.title} <span className="text-muted-foreground">({o.matched} passages)</span></li>)}</ul>
+            <label className="mt-3 flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={withdraw} onChange={(e) => setWithdraw(e.target.checked)} /><span>Withdraw those {overlapSources} earlier upload{overlapSources === 1 ? "" : "s"} when importing, so the sheet is the only source. They stay in the database, marked as replaced.</span></label>
+          </>
+        )}
+      </div>
+
+      <div>
+        <p className="font-medium">Possible names still in the text</p>
+        <p className="text-sm text-muted-foreground">Names in your Name column are already removed. These capitalised words look like names but are not in that column. Tick the ones that are people, then remove them. Names written in lowercase or in Devanagari cannot be found this way, so also look through the copy afterwards, or add a name below.</p>
+        {p.names.length === 0 ? <p className="mt-2 text-sm text-muted-foreground">No candidates found.</p> : (
+          <>
+            <ul className="mt-2 flex max-h-44 flex-wrap gap-2 overflow-auto">{p.names.map((n) => <li key={n.word}><label className={cn("inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-sm", picked.has(n.word) && "border-foreground bg-secondary")}><input type="checkbox" className="sr-only" checked={picked.has(n.word)} onChange={() => toggle(n.word)} />{n.word}<span className="text-xs tabular-nums text-muted-foreground">{n.count}</span></label></li>)}</ul>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button className="rounded-full" disabled={!picked.size || names.isPending} onClick={() => names.mutate({ names: [...picked], notNames: [] })}>Remove ticked as names</Button>
+              <Button variant="outline" className="rounded-full" disabled={!picked.size || names.isPending} onClick={() => names.mutate({ names: [], notNames: [...picked] })}>Ticked are not names</Button>
+            </div>
+          </>
+        )}
+        <form className="mt-3 flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); if (manual.trim().length >= 2) names.mutate({ names: [manual.trim()], notNames: [] }); }}>
+          <input id={`manual-name-${link.id}`} aria-label="Add a name to remove" className={cn(field, "max-w-64")} placeholder="Add a name to remove" value={manual} onChange={(e) => setManual(e.target.value)} />
+          <Button type="submit" variant="outline" className="rounded-full" disabled={manual.trim().length < 2 || names.isPending}>Add</Button>
+        </form>
+      </div>
+
+      <Button className="rounded-full" disabled={run.isPending} onClick={() => run.mutate()}>{run.isPending ? <><Loader2 className="animate-spin" />Importing…</> : `Import ${p.rows} participants`}</Button>
     </div>
   );
 }
@@ -111,7 +173,7 @@ function SheetsTab() {
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 font-semibold"><Table2 className="size-4 shrink-0" /><span className="truncate">{l.name}</span>{!l.enabled && <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-normal">Paused</span>}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{l.rows} row{l.rows === 1 ? "" : "s"}{l.removedRows ? ` · ${l.removedRows} removed from the sheet` : ""} · {l.lastSyncedAt ? `last read ${relativeTime(l.lastSyncedAt)}` : "not read yet"}</p>
-                  {l.lastMessage && <p className={cn("mt-1 text-sm", l.lastStatus === "ok" ? "text-muted-foreground" : l.lastStatus === "needs_confirmation" ? "text-mixed" : "text-risk")}>{l.lastMessage}</p>}
+                  {l.lastMessage && <p className={cn("mt-1 text-sm", l.lastStatus === "ok" ? "text-muted-foreground" : l.lastStatus === "needs_confirmation" || l.lastStatus === "preview" ? "text-mixed" : "text-risk")}>{l.lastMessage}</p>}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {l.lastStatus === "needs_confirmation" && <Button className="rounded-full" disabled={sync.isPending} onClick={() => sync.mutate({ id: l.id, force: true })}>Apply anyway</Button>}
@@ -120,6 +182,7 @@ function SheetsTab() {
                   {l.tabs.length > 0 && <Button asChild variant="outline" className="rounded-full"><Link to="/sheets/$id" params={{ id: l.id }} search={{ tab: l.tabs[0]!.title }}>View</Link></Button>}
                 </div>
               </div>
+              {!l.imported && l.preview && <SheetReview link={l} onDone={refresh} onMessage={setMsg} />}
             </li>
           ))}
         </ul>

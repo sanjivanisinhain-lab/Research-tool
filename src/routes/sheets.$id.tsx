@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink, ShieldCheck } from "lucide-react";
-import { adminApi } from "@/api/admin";
+import { adminApi, type SheetRowDetail } from "@/api/admin";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingBlock, relativeTime } from "@/components/research/primitives";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
 const PAGE = 40;
 
 export const Route = createFileRoute("/sheets/$id")({
-  validateSearch: (s: Record<string, unknown>): { tab?: string; row?: number } => ({
+  validateSearch: (s: Record<string, unknown>): { tab?: string; row?: number; ev?: number } => ({
+    ...(Number.isInteger(Number(s["ev"])) && Number(s["ev"]) > 0 ? { ev: Number(s["ev"]) } : {}),
     ...(typeof s["tab"] === "string" ? { tab: s["tab"] } : {}),
     ...(Number.isInteger(Number(s["row"])) && Number(s["row"]) > 0 ? { row: Number(s["row"]) } : {}),
   }),
@@ -20,10 +21,11 @@ export const Route = createFileRoute("/sheets/$id")({
 
 function SheetPage() {
   const { id } = Route.useParams();
-  const { tab, row } = Route.useSearch();
+  const { tab, row, ev } = Route.useSearch();
   const navigate = Route.useNavigate();
   const [from, setFrom] = useState(() => (row ? Math.max(1, row - 8) : 1));
   const q = useQuery({ queryKey: ["sheet", id, tab ?? "", from], queryFn: () => adminApi.sheetView(id, { ...(tab ? { tab } : {}), from, limit: PAGE }), retry: false, placeholderData: (p) => p });
+  const detail = useQuery({ queryKey: ["sheet-row", id, q.data?.tab ?? tab ?? "", row ?? 0, ev ?? 0], queryFn: () => adminApi.sheetRow(id, q.data!.tab, row!, ev), enabled: !!row && !!q.data, retry: false });
   const focusRef = useRef<HTMLTableRowElement>(null);
   useEffect(() => { focusRef.current?.scrollIntoView({ block: "center" }); }, [q.data?.from, q.data?.tab, row]);
   if (q.isLoading) return <LoadingBlock rows={6} />;
@@ -60,7 +62,7 @@ function SheetPage() {
             {v.rows.map((r) => {
               const focus = r.row === row && v.tab === (tab ?? v.tab);
               return (
-                <tr key={r.row} ref={focus ? focusRef : undefined} aria-current={focus ? "true" : undefined} className={cn("border-t align-top", focus && "bg-brand-soft ring-2 ring-inset ring-brand", r.removed && "text-muted-foreground line-through decoration-muted-foreground/40")}>
+                <tr key={r.row} ref={focus ? focusRef : undefined} aria-current={focus ? "true" : undefined} onClick={() => navigate({ search: { tab: v.tab, row: r.row } })} className={cn("cursor-pointer border-t align-top hover:bg-secondary/50", focus && "bg-brand-soft ring-2 ring-inset ring-brand", r.removed && "text-muted-foreground line-through decoration-muted-foreground/40")}>
                   <th scope="row" className="px-3 py-2 text-right text-xs font-normal tabular-nums text-muted-foreground">{r.row}</th>
                   <td className="px-3 py-2 text-xs tabular-nums">{r.participantId ?? "–"}{r.removed && <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide no-underline">Removed from sheet</span>}</td>
                   {v.header.map((_, i) => <td key={i} className={cn("px-3 py-2", (r.cells[i]?.length ?? 0) > 60 ? "min-w-[320px] max-w-[520px]" : "whitespace-nowrap")}>{r.cells[i] ?? ""}</td>)}
@@ -71,6 +73,36 @@ function SheetPage() {
         </table>
         {v.rows.length === 0 && <p className="p-6 text-sm text-muted-foreground">No rows in this range.</p>}
       </div>
+      {row && detail.data && <RowDetails d={detail.data} />}
+      {row && detail.isError && <p className="mt-4 text-sm text-muted-foreground">That row isn't in the copy any more.</p>}
     </div>
+  );
+}
+
+const LONG = 400;
+/** Splits text around the quoted words so they can be marked. */
+function Highlighted({ text, quote }: { text: string; quote: string | null }) {
+  const at = quote ? text.indexOf(quote) : -1;
+  if (!quote || at < 0) return <span className="whitespace-pre-wrap">{text}</span>;
+  return <span className="whitespace-pre-wrap">{text.slice(0, at)}<mark id="cited-quote" className="rounded bg-brand-soft px-0.5 ring-1 ring-brand">{quote}</mark>{text.slice(at + quote.length)}</span>;
+}
+
+function RowDetails({ d }: { d: SheetRowDetail }) {
+  useEffect(() => { document.getElementById("cited-quote")?.scrollIntoView({ block: "center" }); }, [d.row, d.quote]);
+  const found = !!d.quote && d.cells.some((c) => c.includes(d.quote!));
+  return (
+    <section aria-label={`Row ${d.row} in full`} className="mt-6 rounded-2xl border bg-card p-6">
+      <p className="eyebrow">Row {d.row}{d.externalId ? ` · ${d.externalId}` : ""}{d.participantId ? ` · participant ${d.participantId}` : ""}</p>
+      {d.removed && <p className="mt-2 text-sm text-risk">This row was later removed from the sheet.</p>}
+      {d.quote && <p className="mt-2 text-sm text-muted-foreground">{found ? "The words the insight was built on are marked below." : "The cited words are not found word for word in this row (the text may have been tidied after the insight was made)."}</p>}
+      <dl className="mt-4 grid gap-4">
+        {d.header.map((h, i) => d.cells[i] ? (
+          <div key={i}>
+            <dt className="text-xs font-medium text-muted-foreground">{h}</dt>
+            <dd className={cn("mt-1 text-sm", d.cells[i]!.length > LONG && "max-h-[420px] overflow-auto rounded-lg bg-secondary/50 p-3")}><Highlighted text={d.cells[i]!} quote={d.quote} /></dd>
+          </div>
+        ) : null)}
+      </dl>
+    </section>
   );
 }

@@ -29,9 +29,15 @@ export type StudyRequestItem = {
   plan: { question: string; audience: { name: string }[]; studyPlan: { method?: string; objective: string; audience: string; task: string; watchFor: string; questions: string[] }; known: { title: string; body: string }[]; unknowns: { title: string; body: string }[] };
 };
 
-export type SheetSync = { ok: boolean; status: "ok" | "error" | "needs_confirmation"; message: string; added: number; edited: number; removed: number; linked: number; unchanged: number };
-export type SheetLinkInfo = { id: string; name: string; spreadsheetId: string; studyName: string; product: string; enabled: boolean; lastSyncedAt: string | null; lastStatus: "ok" | "error" | "needs_confirmation" | null; lastMessage: string | null; rows: number; removedRows: number; tabs: { title: string; gid: string | null }[] };
+export type SheetPreview = {
+  at: string; rows: number; transcripts: number; notes: number;
+  perStudy: { study: string; rows: number; transcripts: number; notes: number }[];
+  warnings: string[]; overlaps: { externalId: string; kind: "transcript" | "notes"; sourceId: string; title: string; participantId: string | null; matched: string }[]; names: { word: string; count: number }[];
+};
+export type SheetSync = { ok: boolean; status: "ok" | "error" | "needs_confirmation" | "preview"; message: string; added: number; edited: number; removed: number; linked: number; unchanged: number; preview?: SheetPreview };
+export type SheetLinkInfo = { id: string; name: string; spreadsheetId: string; studyName: string; product: string; enabled: boolean; lastSyncedAt: string | null; lastStatus: "ok" | "error" | "needs_confirmation" | "preview" | null; lastMessage: string | null; imported: boolean; preview: SheetPreview | null; rows: number; removedRows: number; tabs: { title: string; gid: string | null }[] };
 export type SheetsInfo = { configured: boolean; serviceAccountEmail: string | null; links: SheetLinkInfo[] };
+export type SheetRowDetail = { header: string[]; cells: string[]; row: number; tab: string; removed: boolean; participantId: string | null; externalId: string | null; quote: string | null };
 export type SheetView = { id: string; name: string; spreadsheetId: string; tab: string; gid: string | null; tabs: { title: string; gid: string | null }[]; header: string[]; from: number; rows: { row: number; cells: string[]; removed: boolean; participantId: string | null }[]; hasPrev: boolean; hasNext: boolean; lastSyncedAt: string | null };
 const orThrow = <T extends object>(body: T): T => { if ("error" in body && typeof (body as { error: unknown }).error === "string") throw new Error((body as { error: string }).error); return body; };
 
@@ -39,6 +45,9 @@ export const adminApi = {
   sheets: () => call<SheetsInfo>("/api/admin/sheets"),
   linkSheet: async (v: { url: string; name: string; study: string; product: string }) => orThrow(await call<{ id: string; sync: SheetSync }>("/api/admin/sheets", json("POST", v))),
   syncSheet: async (id: string, force = false) => orThrow(await call<SheetSync>(`/api/admin/sheets/${id}/sync`, json("POST", { force }))),
+  importSheet: async (id: string, withdrawOverlap: boolean) => orThrow(await call<SheetSync>(`/api/admin/sheets/${id}/sync`, json("POST", { import: true, withdrawOverlap }))),
+  sheetNames: async (id: string, names: string[], notNames: string[]) => orThrow(await call<SheetSync>(`/api/admin/sheets/${id}/names`, json("POST", { names, notNames }))),
+  sheetRow: (id: string, tab: string, row: number, evidence?: number) => call<SheetRowDetail>(`/api/sheets/${id}/row?${new URLSearchParams({ tab, row: String(row), ...(evidence ? { evidence: String(evidence) } : {}) })}`),
   setSheetEnabled: (id: string, enabled: boolean) => call<{ ok: boolean }>(`/api/admin/sheets/${id}`, json("PATCH", { enabled })),
   sheetView: (id: string, o: { tab?: string; from?: number; limit?: number }) => {
     const q = new URLSearchParams(); if (o.tab) q.set("tab", o.tab); if (o.from) q.set("from", String(o.from)); if (o.limit) q.set("limit", String(o.limit));
