@@ -17,20 +17,27 @@ function buildPattern(terms: string[]): RegExp | null {
   return new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])(?:${uniq.map(esc).join("|")})(?![\\p{L}\\p{M}\\p{N}_])`, "giu");
 }
 
-/** Full names plus each name token of 3+ letters ("Sanjay Pandit" -> Sanjay, Pandit). */
+/** Words that turn up in a Name or City cell without being a name ("Name not given", "New caller", "Unknown"). Removing them would damage the text, so they are never used as names. */
+export const NOT_NAMES = new Set(["name", "names", "city", "phone", "email", "not", "given", "unknown", "none", "nil", "null", "new", "old", "caller", "customer", "user", "participant", "anonymous", "anon", "test", "pending", "tbd", "available", "and", "the", "for", "with", "sir", "madam", "mam", "mrs", "miss", "shri", "smt", "yes", "male", "female"]);
+const onlyFiller = (words: string[]) => words.every((w) => NOT_NAMES.has(w.toLowerCase()));
+
+/** Full names plus each name token of 3+ letters ("Sanjay Pandit" -> Sanjay, Pandit). Filler words are left out. */
 export function nameTerms(fullNames: string[]): string[] {
   const out: string[] = [];
   for (const n of fullNames) {
     const clean = n.replace(/[^\p{L}\p{M}\p{N}\s]/gu, " ").trim();
     if (!clean) continue;
-    out.push(clean, ...clean.split(/\s+/));
+    const words = clean.split(/\s+/);
+    const real = words.filter((w) => !NOT_NAMES.has(w.toLowerCase()));
+    if (!real.length) continue;
+    out.push(real.join(" "), ...real);
   }
   return out;
 }
 
 export function makeRedactor(lists: RedactionLists) {
   const nameRe = buildPattern(nameTerms(lists.names));
-  const placeRe = buildPattern(lists.places.flatMap((p) => [p, p.replace(/_/g, " ")]));
+  const placeRe = buildPattern(lists.places.filter((p) => !onlyFiller(p.replace(/[^\p{L}\p{M}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean))).flatMap((p) => [p, p.replace(/_/g, " ")]));
   return function redact(text: string): { text: string; counts: RedactionCounts } {
     const counts: RedactionCounts = { names: 0, phones: 0, emails: 0, places: 0 };
     let t = text;

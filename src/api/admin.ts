@@ -30,7 +30,7 @@ export type StudyRequestItem = {
 };
 
 export type SheetPreview = {
-  at: string; rows: number; transcripts: number; notes: number;
+  at: string; rows: number; noData: number; transcripts: number; notes: number;
   perStudy: { study: string; rows: number; transcripts: number; notes: number }[];
   warnings: string[]; overlaps: { externalId: string; kind: "transcript" | "notes"; sourceId: string; title: string; participantId: string | null; matched: string }[]; names: { word: string; count: number }[];
 };

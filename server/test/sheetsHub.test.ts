@@ -19,6 +19,7 @@ const rows = (): string[][] => [
   ["GZP-01", "Meena", "9876543210", TR2, "Transcript + notes", "Gen Z - Phone calls (tier 2/3)", "Udaipur", "05/11/2026", "connected", "PROFILE\n Age 27 tier 2. Buys sarees online.\n TRUST\n Does not trust prepaid.", "Verified"],
   ["CIN-01", "", "", "", "Notes only", "COD research - Calling Insights (Sept)", "Kota", "24-09-2026", "Connected", "no issues, uses cod because trust, got auto cancelled once", "Notes only - no transcript."],
   ["FTU-01", "", "", "", "Notes only", "FTU - Observed usability sessions", "", "", "Observed session", "Background: never used Snapdeal. She scrolled the homepage for a minute and tapped Buy Now.", "Your typed moderator notes only"],
+  ["GZP-99", "Nanda", "", "", "Notes only", "Gen Z - Phone calls (tier 2/3)", "", "", "", "", ""], // listed, nothing to read yet
   ["", "", "", "", "", "", "", "", "", "stray", ""],
   ["CIN-01", "", "", "", "Notes only", "COD research - Calling Insights (Sept)", "", "", "", "a duplicate id", ""],
 ];
@@ -43,7 +44,7 @@ describe("a sheet of participants", () => {
     expect(r).toMatchObject({ ok: false, status: "preview" });
     expect((db.prepare("SELECT COUNT(*) n FROM sources").get() as { n: number }).n).toBe(0);
     const p = r.preview!;
-    expect(p).toMatchObject({ rows: 4, transcripts: 2, notes: 3 });
+    expect(p).toMatchObject({ rows: 4, noData: 1, transcripts: 2, notes: 3 }); // the row with nothing to read is not counted as a participant
     expect(p.perStudy.map((s) => [s.study, s.rows])).toEqual([["Gen Z - In-person interviews", 1], ["Gen Z - Phone calls (tier 2/3)", 1], ["COD research - Calling Insights (Sept)", 1], ["FTU - Observed usability sessions", 1]]);
     expect(p.warnings.join(" ")).toMatch(/no Participant ID/); expect(p.warnings.join(" ")).toMatch(/CIN-01 appears more than once/);
     expect(p.names.map((n) => n.word)).toContain("Seema"); // a name that the Name column did not list

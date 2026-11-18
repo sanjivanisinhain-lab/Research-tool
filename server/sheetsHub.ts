@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import type { Db } from "./db";
 import { ingestHubSource, loadTerms, saveTerms, type TermsStore } from "./ingest";
+import { NOT_NAMES } from "./redact";
 import type { makeRedactor } from "./redact";
 
 const sha = (s: string) => crypto.createHash("sha1").update(s).digest("hex");
@@ -29,7 +30,7 @@ export type HubRow = {
   transcript: string; notes: string; // the text that will be read (already redacted), empty if that part is not used
   tHash: string; nHash: string; display: string[];
 };
-export type HubTab = { title: string; gid: string; header: string[]; headerRow: number; rows: HubRow[]; warnings: string[] };
+export type HubTab = { title: string; gid: string; header: string[]; headerRow: number; rows: HubRow[]; warnings: string[]; noData: number };
 export type HubOld = { id: number; external_id: string; row_number: number; content_hash: string; hash2: string | null; source_id: string | null; source2_id: string | null; participant_id: string | null; state: "live" | "removed" };
 
 const typeOf = (study: string): HubRow["type"] => (/\b(ftu|observed|usability)\b/i.test(study) ? "usability" : /call|cod|insight/i.test(study) ? "cx_call" : "interview");
@@ -50,7 +51,7 @@ export function hubTerms(values: string[][], h: number): { names: string[]; plac
   const names: string[] = [], places: string[] = [];
   for (const r of values.slice(h + 1)) {
     const n = ni >= 0 ? (r[ni] ?? "").trim() : "";
-    if (n) { names.push(n); for (const w of n.split(/\s+/)) if (w.length >= 3) names.push(w); }
+    if (n) { names.push(n); for (const w of n.split(/\s+/)) if (w.length >= 3 && !NOT_NAMES.has(w.toLowerCase())) names.push(w); }
     const c = ci >= 0 ? (r[ci] ?? "").trim() : "";
     if (c) places.push(c);
   }
@@ -62,7 +63,7 @@ export function parseHubTab(title: string, gid: string, values: string[][], reda
   const header = values[h]!.map((c) => c.trim());
   const keys = header.map(keyOf);
   const col = (k: string) => keys.indexOf(k);
-  const warnings: string[] = []; const seen = new Set<string>(); const rows: HubRow[] = [];
+  const warnings: string[] = []; const seen = new Set<string>(); const rows: HubRow[] = []; let noData = 0;
   for (let i = h + 1; i < values.length; i++) {
     const raw = values[i] ?? [];
     if (!raw.some((c) => c.trim())) continue;
@@ -78,6 +79,7 @@ export function parseHubTab(title: string, gid: string, values: string[][], reda
     const study = get("study");
     const noisy = /machine[- ]transcrib|garbled|rough text/i.test(`${get("notes")} ${get("qa")}`);
     const t = tRaw ? redact(tRaw).text : "", n = nRaw ? redact(nRaw).text : "";
+    if (!t && !n) { noData++; continue; } // listed, but nothing to read yet (for example a "still to find" list). It is picked up when a transcript or notes appear.
     const display = header.map((_, c) => {
       const k = keys[c]!, v = (raw[c] ?? "").trim();
       if (!v) return "";
@@ -89,7 +91,7 @@ export function parseHubTab(title: string, gid: string, values: string[][], reda
     });
     rows.push({ row: i + 1, id, study, date: normaliseDate(get("date")), type: typeOf(study), noisy, transcript: t, notes: n, tHash: t ? sha(t) : "", nHash: n ? sha(n) : "", display });
   }
-  return { title, gid, header: header.map((x, c) => (keys[c] === "qa" ? `${x} (hidden)` : x)), headerRow: h + 1, rows, warnings };
+  return { title, gid, noData, header: header.map((x, c) => (keys[c] === "qa" ? `${x} (hidden)` : x)), headerRow: h + 1, rows, warnings };
 }
 
 export type HubPlan = { tab: HubTab; keep: { old: HubOld; row: HubRow }[]; edits: { old: HubOld; row: HubRow }[]; adds: HubRow[]; removes: HubOld[] };
@@ -171,7 +173,7 @@ export function addNamesToTerms(termsPath: string | undefined, names: string[]) 
 }
 
 export type Preview = {
-  at: string; rows: number; transcripts: number; notes: number;
+  at: string; rows: number; noData: number; transcripts: number; notes: number;
   perStudy: { study: string; rows: number; transcripts: number; notes: number }[];
   warnings: string[]; overlaps: Overlap[]; names: { word: string; count: number }[];
 };
@@ -186,7 +188,7 @@ export function buildPreview(db: Db, tabs: HubTab[], termsPath: string | undefin
   }
   const texts = tabs.flatMap((t) => t.rows.flatMap((r) => [r.transcript, r.notes])).filter(Boolean);
   return {
-    at: new Date().toISOString(), rows, transcripts, notes, perStudy: [...per.entries()].map(([study, v]) => ({ study, ...v })),
+    at: new Date().toISOString(), rows, noData: tabs.reduce((n, t) => n + t.noData, 0), transcripts, notes, perStudy: [...per.entries()].map(([study, v]) => ({ study, ...v })),
     warnings: tabs.flatMap((t) => t.warnings), overlaps: findOverlaps(db, tabs), names: possibleNames(texts, loadTerms(termsPath), ignored),
   };
 }
@@ -200,6 +202,7 @@ export type IngestCtx = {
 /** Write a plan: add new participants, re-read edited parts, flag removed rows. Runs inside the caller's transaction. */
 export function applyHub(c: IngestCtx, plan: HubPlan) {
   const { db } = c; const now = () => new Date().toISOString();
+  if (!plan.keep.length && !plan.edits.length && !plan.adds.length && !plan.removes.length) return; // a tab with nothing to read (a list of people still to find) leaves no trace
   const part = (row: HubRow, kind: "transcript" | "notes", participantId: string | null) => {
     const text = kind === "transcript" ? row.transcript : row.notes;
     if (!text) return null;

@@ -76,7 +76,7 @@ function SheetReview({ link, onDone, onMessage }: { link: SheetLinkInfo; onDone:
     <div className="mt-4 space-y-5 rounded-xl border border-dashed p-4">
       <div>
         <p className="font-medium">Review before importing</p>
-        <p className="text-sm text-muted-foreground">Nothing has been imported yet. {p.rows} participants were found: {p.transcripts} transcripts and {p.notes} sets of notes.</p>
+        <p className="text-sm text-muted-foreground">Nothing has been imported yet. {p.rows} participants with data were found: {p.transcripts} transcripts and {p.notes} sets of notes.{p.noData > 0 && <> {p.noData} more {p.noData === 1 ? "person is" : "people are"} listed with no transcript or notes yet. {p.noData === 1 ? "That row is" : "Those rows are"} skipped now and picked up once data is added.</>}</p>
         <table className="mt-3 w-full text-sm"><thead><tr className="text-left text-xs text-muted-foreground"><th className="py-1 font-medium">Study</th><th className="py-1 text-right font-medium">People</th><th className="py-1 text-right font-medium">Transcripts</th><th className="py-1 text-right font-medium">Notes</th></tr></thead>
           <tbody>{p.perStudy.map((x) => <tr key={x.study} className="border-t"><td className="py-1.5 pr-3">{x.study}</td><td className="py-1.5 text-right tabular-nums">{x.rows}</td><td className="py-1.5 text-right tabular-nums">{x.transcripts}</td><td className="py-1.5 text-right tabular-nums">{x.notes}</td></tr>)}</tbody></table>
         {p.warnings.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-mixed">{p.warnings.slice(0, 8).map((w, i) => <li key={i}>{w}</li>)}{p.warnings.length > 8 && <li>and {p.warnings.length - 8} more</li>}</ul>}
