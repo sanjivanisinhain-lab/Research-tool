@@ -207,6 +207,7 @@ function StatusStrip() {
   const qc = useQueryClient();
   const jobs = useQuery({ queryKey: ["admin", "jobs"], queryFn: adminApi.jobs, refetchInterval: 4000 });
   const rebuild = useMutation({ mutationFn: adminApi.rebuildAudiences, onSuccess: () => qc.invalidateQueries({ queryKey: ["admin"] }) });
+  const check = useMutation({ mutationFn: adminApi.checkAi, onSuccess: () => qc.invalidateQueries({ queryKey: ["admin"] }) });
   const retry = useMutation({ mutationFn: adminApi.retryJob, onSuccess: () => qc.invalidateQueries({ queryKey: ["admin"] }) });
   const n = (s: string) => jobs.data?.counts.find((c) => c.status === s)?.n ?? 0;
   const busy = n("queued") + n("running");
@@ -216,10 +217,13 @@ function StatusStrip() {
         <span className="flex items-center gap-2">{busy > 0 ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4 text-strong" />}{busy > 0 ? `Working on ${busy} task${busy === 1 ? "" : "s"} (transcribing and reading)` : "AI is idle"}</span>
         <span className="text-muted-foreground">{n("done")} done{n("failed") > 0 && <> · <span className="font-medium text-risk">{n("failed")} failed</span></>}</span>
         {jobs.data && !jobs.data.aiConfigured && <span className="font-medium text-risk">AI key not set: reading is paused</span>}
-        <Button variant="outline" size="sm" className="ml-auto rounded-full" disabled={rebuild.isPending || busy > 0} onClick={() => rebuild.mutate()}>
+        <Button variant="outline" size="sm" className="ml-auto rounded-full" disabled={check.isPending} onClick={() => check.mutate()} title="Sends one tiny request to Gemini and tells you whether it works, and if not, why.">{check.isPending ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Check className="mr-1.5 size-3.5" />}Check Gemini</Button>
+        <Button variant="outline" size="sm" className="rounded-full" disabled={rebuild.isPending || busy > 0} onClick={() => rebuild.mutate()}>
           <RefreshCw className="mr-1.5 size-3.5" />Rebuild audiences
         </Button>
       </div>
+      {check.data && <p role="status" className={cn("mt-2 text-sm", check.data.ok ? "text-strong" : "text-risk")}>{check.data.message}{check.data.model && !check.data.ok ? ` (model: ${check.data.model})` : ""}</p>}
+      {jobs.data?.aiPause && <p className="mt-2 text-sm text-mixed">Reading is paused until about {new Date(jobs.data.aiPause.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. {jobs.data.aiPause.reason}</p>}
       {rebuild.isError && <p className="mt-2 text-xs text-risk">{(rebuild.error as Error).message}</p>}
       {rebuild.isSuccess && <p className="mt-2 text-xs text-muted-foreground">Rebuilding segments and personas from approved evidence. This takes a few minutes.</p>}
       {jobs.data?.recentFailures.slice(0, 3).map((f) => (

@@ -1,5 +1,5 @@
 import type { Db } from "./db";
-import type { AiProvider } from "./ai/provider";
+import { GeminiError, type AiProvider } from "./ai/provider";
 import { extractSource } from "./ai/extract";
 import { canonicaliseThemes } from "./ai/themes";
 import { needsPlainNames, plainNames, synthesise } from "./ai/personas";
@@ -28,11 +28,18 @@ export function enqueueRebuild(db: Db): number {
 export function retryJob(db: Db, id: number): boolean {
   return Number(db.prepare("UPDATE jobs SET status='queued', error=NULL, started_at=NULL, finished_at=NULL, attempts=0, run_after=NULL WHERE id=? AND status='failed'").run(id).changes) > 0;
 }
+/** When Gemini's daily limit is used up nothing can be read until it resets. Jobs wait (without using up their tries) instead of failing one after another. */
+let aiPause: { until: number; reason: string } | null = null;
+export const getAiPause = () => (aiPause && aiPause.until > Date.now() ? { until: new Date(aiPause.until).toISOString(), reason: aiPause.reason } : null);
+export const clearAiPause = () => { aiPause = null; };
+export const PAUSE_MINUTES = 60;
+
 /** After a failure (usually Gemini being busy or out of quota) a job waits and is tried again by itself: 3, 6, 12 then 24 minutes. */
 export const RETRY_MINUTES = [3, 6, 12, 24];
 
 /** Run the oldest queued job. Returns true if one ran. Jobs that die with the process are re-queued at startup. */
 export async function runNextJob(db: Db, ai: AiProvider): Promise<boolean> {
+  if (getAiPause()) return false; // see above
   const job = db.prepare("SELECT id, kind, source_id, payload, attempts FROM jobs WHERE status='queued' AND (run_after IS NULL OR run_after <= ?) ORDER BY id LIMIT 1").get(new Date().toISOString()) as { id: number; kind: string; source_id: string | null; payload: string | null; attempts: number } | undefined;
   if (!job) return false;
   db.prepare("UPDATE jobs SET status='running', started_at=? WHERE id=?").run(new Date().toISOString(), job.id);
@@ -49,6 +56,11 @@ export async function runNextJob(db: Db, ai: AiProvider): Promise<boolean> {
     db.prepare("UPDATE jobs SET status='done', finished_at=? WHERE id=?").run(new Date().toISOString(), job.id);
   } catch (e) {
     const msg = (e as Error).message.slice(0, 300);
+    if (e instanceof GeminiError && e.kind === "quota_day") { // not this job's fault: wait for the limit to reset, keep its tries
+      aiPause = { until: Date.now() + PAUSE_MINUTES * 60_000, reason: msg };
+      db.prepare("UPDATE jobs SET status='queued', run_after=?, error=?, started_at=NULL WHERE id=?").run(new Date(aiPause.until).toISOString(), `${msg} (waiting)`, job.id);
+      return true;
+    }
     const wait = job.kind === "transcribe" ? undefined : RETRY_MINUTES[job.attempts]; // recordings are expensive to send again: those wait for a person to retry
     if (wait !== undefined) db.prepare("UPDATE jobs SET status='queued', attempts=?, run_after=?, error=?, started_at=NULL WHERE id=?").run(job.attempts + 1, new Date(Date.now() + wait * 60_000).toISOString(), `${msg} (will try again in ${wait} minutes)`, job.id);
     else db.prepare("UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?").run(msg, new Date().toISOString(), job.id);

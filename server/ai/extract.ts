@@ -1,5 +1,5 @@
 import { audit, type Db } from "../db";
-import type { AiProvider } from "./provider";
+import { GeminiError, type AiProvider } from "./provider";
 
 export const PROMPT_VERSION = "extract-v2";
 const MAX_CHUNK_CHARS = 9000; // one call per chunk: long transcripts used to take dozens of calls, which is what made reading slow
@@ -74,9 +74,15 @@ export async function extractSource(db: Db, ai: AiProvider, sourceId: string): P
   // Research-team uploads are trusted (approved on extraction); contributor input waits in the review queue.
   const evStatus = src.submitted_by === "research_team" ? "approved" : "pending";
   let kept = 0;
-  for (const chunk of chunkUtterances(utts)) {
+  // A piece that Gemini cannot answer in one go (the reply is cut off) is split in two and read again, rather than asked again unchanged.
+  const readChunk = async (chunk: Utt[], depth = 0): Promise<void> => {
     const prompt = chunk.map((u) => `[${u.id}] ${u.speaker}: ${u.text}`).join("\n");
-    const out = await ai.generateJson<{ findings: Finding[] }>({ system: SYSTEM, prompt: `Material (origin: ${src.origin}):\n${prompt}`, schema: SCHEMA });
+    let out: { findings: Finding[] };
+    try { out = await ai.generateJson<{ findings: Finding[] }>({ system: SYSTEM, prompt: `Material (origin: ${src.origin}):\n${prompt}`, schema: SCHEMA }); }
+    catch (e) {
+      if (e instanceof GeminiError && e.kind === "format" && depth < 3 && chunk.length > 1) { const mid = Math.ceil(chunk.length / 2); await readChunk(chunk.slice(0, mid), depth + 1); await readChunk(chunk.slice(mid), depth + 1); return; }
+      throw e;
+    }
     for (const f of out.findings ?? []) {
       proposed++;
       const q = norm(f.quote ?? "");
@@ -90,7 +96,8 @@ export async function extractSource(db: Db, ai: AiProvider, sourceId: string): P
       const r = ins.run(sourceId, src.participant_id, utt.id, q, f.translation ?? null, onScreen ? "did" : f.kind, provenance, f.theme.toLowerCase(), f.sentiment, f.pain_point ?? null, f.need ?? null, f.job_to_be_done ?? null, f.emotion ?? null, flags, evStatus, new Date().toISOString());
       kept += Number(r.changes);
     }
-  }
+  };
+  for (const chunk of chunkUtterances(utts)) await readChunk(chunk);
   db.prepare("INSERT INTO extraction_runs(source_id,model,prompt_version,proposed,kept,dropped_unverified,created_at) VALUES (?,?,?,?,?,?,?)").run(sourceId, ai.model, PROMPT_VERSION, proposed, kept, dropped, new Date().toISOString());
   audit(db, "extract", { sourceId, model: ai.model, proposed, kept, dropped });
   return { sourceId, proposed, kept, droppedUnverified: dropped, cached: false };

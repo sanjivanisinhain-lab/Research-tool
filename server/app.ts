@@ -5,13 +5,13 @@ import { rateLimit } from "./limits";
 import { mountStatic } from "./static";
 import { ingestContribution } from "./ingest";
 import { processUpload } from "./upload";
-import { enqueueExtractions, enqueueRebuild, enqueueTranscription, retryJob } from "./jobs";
+import { clearAiPause, enqueueExtractions, enqueueRebuild, enqueueTranscription, getAiPause, retryJob } from "./jobs";
 import { MEDIA_EXTS, ffmpegAvailable, streamKinds } from "./media";
 import { newUploadPath } from "./ai/transcribe";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { interactive, type AiProvider } from "./ai/provider";
+import { GeminiError, interactive, type AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
 import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
@@ -114,11 +114,22 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.get("/api/admin/jobs", (_req, res) => {
     res.json({
       counts: db.prepare("SELECT status, COUNT(*) n FROM jobs GROUP BY status").all(),
+      aiPause: getAiPause(),
       recentFailures: db.prepare("SELECT id, kind, source_id AS sourceId, error, (status='queued') AS retrying FROM jobs WHERE status='failed' OR (status='queued' AND attempts>0) ORDER BY (status='failed') DESC, id DESC LIMIT 20").all(),
       transcriptions: (db.prepare("SELECT id, status, note, created_at AS createdAt, payload FROM jobs WHERE kind='transcribe' AND status IN ('queued','running') ORDER BY id").all() as { id: number; status: string; note: string; createdAt: string; payload: string }[])
         .map((j) => ({ id: j.id, status: j.status, note: j.note, createdAt: j.createdAt, study: (JSON.parse(j.payload) as { study: string }).study })),
       aiConfigured: !!opts.ai,
     });
+  });
+  /** One tiny call to Gemini, so "is it my key, my quota, or Gemini?" has an answer without reading logs. */
+  app.post("/api/admin/ai/check", async (_req, res) => {
+    if (!opts.ai) return res.json({ ok: false, kind: "no_key", message: "No Gemini key is set. Start the app with GEMINI_API_KEY." });
+    const t = Date.now();
+    try {
+      await interactive.run(true, () => opts.ai!.generateJson({ system: "Reply with JSON only.", prompt: "Return {\"ok\": true}", schema: { type: "OBJECT", properties: { ok: { type: "BOOLEAN" } }, required: ["ok"] } }));
+      clearAiPause();
+      res.json({ ok: true, ms: Date.now() - t, model: opts.ai.model, message: `Gemini answered in ${((Date.now() - t) / 1000).toFixed(1)} seconds.` });
+    } catch (e) { res.json({ ok: false, kind: e instanceof GeminiError ? e.kind : "other", message: e instanceof GeminiError ? e.message : "The call failed for an unknown reason.", model: opts.ai.model }); }
   });
   app.post("/api/admin/jobs/rebuild-audiences", (req, res) => {
     const approved = (db.prepare("SELECT COUNT(*) n FROM evidence WHERE status='approved'").get() as { n: number }).n;

@@ -5,6 +5,11 @@ export type JsonRequest = { system: string; prompt: string; schema: Record<strin
 /** Requests from people waiting on a screen run inside this, and skip the pacing that background reading uses to stay inside the free tier. */
 export const interactive = new AsyncLocalStorage<boolean>();
 
+/** Why a Gemini call failed, in terms a person can act on. The message never contains anything from the request. */
+export class GeminiError extends Error {
+  constructor(message: string, readonly kind: "quota_day" | "quota_minute" | "busy" | "format" | "auth" | "model" | "http" | "network", readonly status?: number) { super(message); }
+}
+
 export type Media = { mimeType: string; data: Buffer };
 
 export interface AiProvider {
@@ -30,7 +35,7 @@ export class GeminiProvider implements AiProvider {
       contents: [{ role: "user", parts: [...media.map((m) => ({ inline_data: { mime_type: m.mimeType, data: m.data.toString("base64") } })), { text: req.prompt }] }],
       generationConfig: { responseMimeType: "application/json", responseSchema: req.schema, temperature: media.length ? 0 : 0.1 },
     });
-    let delay = 5000;
+    let delay = 5000; let formatFailures = 0; let last: GeminiError | null = null;
     const maxAttempts = media.length ? 7 : 4; // recordings are worth waiting for; busy periods usually pass
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const wait = interactive.getStore() ? 0 : this.last + this.minGapMs - Date.now(); // gentle pacing for the free tier, for background reading only: a person waiting on an answer should not sit through it
@@ -38,19 +43,44 @@ export class GeminiProvider implements AiProvider {
       this.last = Date.now();
       const startedAt = Date.now();
       const inUrl = process.env["GEMINI_KEY_IN_URL"] === "1";
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${inUrl ? `?key=${encodeURIComponent(this.apiKey)}` : ""}`, {
-        method: "POST", headers: { "Content-Type": "application/json", ...(inUrl ? {} : { "x-goog-api-key": this.apiKey }) }, body, signal: AbortSignal.timeout(media.length ? 240000 : 90000),
-      });
+      let res: Response;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${inUrl ? `?key=${encodeURIComponent(this.apiKey)}` : ""}`, {
+          method: "POST", headers: { "Content-Type": "application/json", ...(inUrl ? {} : { "x-goog-api-key": this.apiKey }) }, body, signal: AbortSignal.timeout(media.length ? 240000 : 120000),
+        });
+      } catch (e) {
+        last = new GeminiError(`Could not reach Gemini (${(e as Error).name === "TimeoutError" ? "no answer in time" : "network error"})`, "network");
+        await new Promise((r) => setTimeout(r, delay)); delay = Math.min(delay * 2, 60_000); continue;
+      }
       if (process.env["GEMINI_TIMING"] === "1") console.log(`Gemini ${model}: ${Date.now() - startedAt} ms, status ${res.status}${interactive.getStore() ? ", waiting person" : ", background"}`); // timings only, never content
       if (res.ok) {
-        const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-        const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-        try { return JSON.parse(text) as T; } catch { if (attempt < maxAttempts - 1) continue; throw new Error("Gemini returned non-JSON output"); } // malformed/truncated reply: ask again
+        const data = (await res.json()) as { candidates?: { finishReason?: string; content?: { parts?: { text?: string }[] } }[] };
+        const cand = data.candidates?.[0];
+        const text = cand?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+        try { if (cand?.finishReason === "MAX_TOKENS") throw new Error("cut off"); return JSON.parse(text) as T; }
+        catch { // cut off or not JSON: asking the identical question again gives the same answer, so give up quickly and let the caller try a smaller piece
+          last = new GeminiError(cand?.finishReason === "MAX_TOKENS" ? "Gemini's answer was cut off (the piece of text was too large)" : "Gemini's answer was not valid JSON", "format");
+          if (++formatFailures >= 2) throw last;
+          continue;
+        }
       }
-      if ([429, 500, 502, 503, 504].includes(res.status)) { await new Promise((r) => setTimeout(r, delay)); delay = Math.min(delay * 2, 60_000); continue; }
-      throw new Error(`Gemini request failed: HTTP ${res.status}`); // body omitted on purpose: may echo request data
+      // Only the status fields of Google's error are read: they describe the limit hit, never the request.
+      const err = (await res.json().catch(() => null)) as { error?: { status?: string; details?: { "@type"?: string; retryDelay?: string; violations?: { quotaId?: string }[] }[] } } | null;
+      const code = err?.error?.status ? ` ${err.error.status}` : "";
+      if (res.status === 429) {
+        const daily = (err?.error?.details ?? []).some((d) => (d.violations ?? []).some((v) => /PerDay/i.test(v.quotaId ?? "")));
+        if (daily) throw new GeminiError("Gemini's daily free limit is used up (HTTP 429). Reading pauses and carries on by itself when the limit resets.", "quota_day", 429);
+        const hint = (err?.error?.details ?? []).map((d) => d.retryDelay).find(Boolean);
+        const secs = hint ? Number.parseFloat(hint) : NaN;
+        last = new GeminiError("Gemini's limit on requests per minute was hit (HTTP 429)", "quota_minute", 429);
+        await new Promise((r) => setTimeout(r, Number.isFinite(secs) ? Math.min(secs, 60) * 1000 + 250 : delay)); delay = Math.min(delay * 2, 60_000); continue;
+      }
+      if ([500, 502, 503, 504].includes(res.status)) { last = new GeminiError(`Gemini is busy or down (HTTP ${res.status}${code})`, "busy", res.status); await new Promise((r) => setTimeout(r, delay)); delay = Math.min(delay * 2, 60_000); continue; }
+      if (res.status === 401 || res.status === 403) throw new GeminiError(`Gemini rejected the API key (HTTP ${res.status}${code}). Check GEMINI_API_KEY.`, "auth", res.status);
+      if (res.status === 404) throw new GeminiError(`Gemini does not know the model "${model}" (HTTP 404). Set GEMINI_MODEL to one that exists.`, "model", 404);
+      throw new GeminiError(`Gemini refused the request (HTTP ${res.status}${code})`, "http", res.status); // 400 usually means a bad key or request
     }
-    throw new Error("Gemini unavailable after retries");
+    throw last ?? new GeminiError("Gemini unavailable after retries", "busy");
   }
 }
 

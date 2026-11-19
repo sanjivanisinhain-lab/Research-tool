@@ -20,7 +20,7 @@ export type UploadMeta = { study: string; product: string; kind: "cx_call" | "in
 export type AdminSource = { id: string; title: string; sourceType: string; origin: string; status: string; submittedBy: "research_team" | "contributor"; date: string | null; quality: string | null; language: string; redaction: Redaction; study: string; participantId: string; createdAt: string; evidence: number; pendingEvidence: number; job: string | null };
 export type TeamUser = { id: string; email: string; name: string | null; role: "admin" | "user"; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null };
 export type SourceText = { title: string; quality: string | null; utterances: { seq: number; speaker: string; startSec: number | null; text: string }[] };
-export type JobsInfo = { counts: { status: string; n: number }[]; transcriptions: { id: number; status: string; note: string; study: string; createdAt: string }[]; recentFailures: { id: number; kind: string; sourceId: string | null; error: string; retrying: number }[]; aiConfigured: boolean };
+export type JobsInfo = { counts: { status: string; n: number }[]; transcriptions: { id: number; status: string; note: string; study: string; createdAt: string }[]; aiPause: { until: string; reason: string } | null; recentFailures: { id: number; kind: string; sourceId: string | null; error: string; retrying: number }[]; aiConfigured: boolean };
 export type ReviewItem = { id: number; participantId: string; quote: string; translation: string | null; kind: "said" | "did"; provenance: string; theme: string; sentiment: string; flags: string; sourceType: string; date: string | null; originalLanguage: string; sourceTitle: string; quality: string | null };
 
 export type StudyRequestItem = {
@@ -63,6 +63,7 @@ export const adminApi = {
   sources: () => call<AdminSource[]>("/api/admin/sources"),
   sourceText: (id: string) => call<SourceText>(`/api/admin/sources/${id}/utterances`),
   jobs: () => call<JobsInfo>("/api/admin/jobs"),
+  checkAi: () => call<{ ok: boolean; kind?: string; message: string; model?: string; ms?: number }>("/api/admin/ai/check", json("POST")),
   rebuildAudiences: () => call<{ jobId: number }>("/api/admin/jobs/rebuild-audiences", json("POST")),
   retryJob: (id: number) => call<{ ok: boolean }>(`/api/admin/jobs/${id}/retry`, json("POST")),
   review: (status: "pending" | "approved" | "rejected", limit = 25) => call<{ total: number; items: ReviewItem[] }>(`/api/admin/evidence?status=${status}&limit=${limit}`),
