@@ -3,6 +3,7 @@ import type { AiProvider } from "./ai/provider";
 import { extractSource } from "./ai/extract";
 import { canonicaliseThemes } from "./ai/themes";
 import { needsPlainNames, plainNames, synthesise } from "./ai/personas";
+import { fillAttributes, needsAttributes } from "./ai/attributes";
 import { transcribeRecording, type TranscribePayload } from "./ai/transcribe";
 import fs from "node:fs";
 import path from "node:path";
@@ -65,13 +66,15 @@ export function startWorker(db: Db, ai: AiProvider | null, intervalMs = 2000, up
   db.prepare("UPDATE jobs SET status='queued' WHERE status='running'").run();
   enqueueExtractions(db); // pick up anything stored but never queued
   if (!ai) { console.warn("No AI provider: queued jobs will wait until GEMINI_API_KEY is set."); return () => {}; }
-  let busy = false; let lastNames = 0;
+  let busy = false; let lastNames = 0; let attrsWaitUntil = 0;
   const t = setInterval(async () => {
     if (busy) return; busy = true;
     try {
       while (await runNextJob(db, ai));
       // Names of groups made before names were kept plain are fixed in the background, once, with no button to press. A failed try waits ten minutes.
       if (needsPlainNames(db) && Date.now() - lastNames > 600_000) { lastNames = Date.now(); try { await plainNames(db, ai); } catch (e) { console.warn(`Could not put audience names in plain words yet: ${(e as Error).message}`); } }
+      // Details the sheet left blank are read from the notes, a few people at a time, when nothing else is waiting. A failed try waits five minutes.
+      if (Date.now() > attrsWaitUntil && needsAttributes(db)) { try { await fillAttributes(db, ai); } catch (e) { attrsWaitUntil = Date.now() + 300_000; console.warn(`Could not read personal details from the notes yet: ${(e as Error).message}`); } }
     } finally { busy = false; }
   }, intervalMs);
   return () => clearInterval(t);

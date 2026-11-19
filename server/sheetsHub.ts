@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import type { Db } from "./db";
 import { ingestHubSource, loadTerms, saveTerms, type TermsStore } from "./ingest";
 import { NOT_NAMES } from "./redact";
+import { lookupCity, normaliseAge, normaliseCustomer, normaliseGender, normalisePayment, normaliseState, normaliseTier, upsertAttributes, type Attrs } from "./attributes";
 import type { makeRedactor } from "./redact";
 
 const sha = (s: string) => crypto.createHash("sha1").update(s).digest("hex");
@@ -13,6 +14,9 @@ type Redact = ReturnType<typeof makeRedactor>;
 const KEYS: Record<string, string> = {
   "participant id": "id", "data available": "data", study: "study", name: "name", number: "number", "mobile number": "number", transcript: "transcript",
   city: "city", "call date": "date", date: "date", "call status": "status", notes: "notes", "match check": "qa",
+  age: "age", "age group": "age", tier: "tier", "city tier": "tier", state: "state", gender: "gender", sex: "gender",
+  payment: "payment", "payment type": "payment", "payment mode": "payment", "cod or prepaid": "payment",
+  customer: "customer", "customer type": "customer", "new or repeat": "customer", "type of user": "customer", "user type": "customer",
 };
 /** Column names in a sheet vary a little ("Notes (your sheet)"): read them by their first words. */
 const keyOf = (h: string) => KEYS[h.toLowerCase().replace(/\(.*?\)/g, "").replace(/\s+/g, " ").trim()] ?? "";
@@ -29,6 +33,7 @@ export type HubRow = {
   row: number; id: string; study: string; date: string; type: "interview" | "cx_call" | "usability"; noisy: boolean;
   transcript: string; notes: string; // the text that will be read (already redacted), empty if that part is not used
   tHash: string; nHash: string; display: string[];
+  sheetAttrs: Partial<Attrs>; cityAttrs: Partial<Attrs>; // details from the sheet's own columns, and what the city tells us (the city itself is not kept)
 };
 export type HubTab = { title: string; gid: string; header: string[]; headerRow: number; rows: HubRow[]; warnings: string[]; noData: number };
 export type HubOld = { id: number; external_id: string; row_number: number; content_hash: string; hash2: string | null; source_id: string | null; source2_id: string | null; participant_id: string | null; state: "live" | "removed" };
@@ -89,7 +94,10 @@ export function parseHubTab(title: string, gid: string, values: string[][], reda
       if (k === "transcript") return wantT ? t : "";
       return redact(v).text;
     });
-    rows.push({ row: i + 1, id, study, date: normaliseDate(get("date")), type: typeOf(study), noisy, transcript: t, notes: n, tHash: t ? sha(t) : "", nHash: n ? sha(n) : "", display });
+    const clean = <T extends object>(o: T): Partial<Attrs> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined)) as Partial<Attrs>;
+    const sheetAttrs = clean({ age: normaliseAge(get("age")), tier: normaliseTier(get("tier")), state: normaliseState(get("state")), gender: normaliseGender(get("gender")), payment: normalisePayment(get("payment")), customer: normaliseCustomer(get("customer")) });
+    const cityAttrs = clean(lookupCity(get("city")) ?? {});
+    rows.push({ row: i + 1, id, study, date: normaliseDate(get("date")), type: typeOf(study), noisy, transcript: t, notes: n, tHash: t ? sha(t) : "", nHash: n ? sha(n) : "", display, sheetAttrs, cityAttrs });
   }
   return { title, gid, noData, header: header.map((x, c) => (keys[c] === "qa" ? `${x} (hidden)` : x)), headerRow: h + 1, rows, warnings };
 }
@@ -210,8 +218,14 @@ export function applyHub(c: IngestCtx, plan: HubPlan) {
   };
   db.prepare("INSERT INTO sheet_tabs(link_id,tab,gid,header_json,header_row) VALUES (?,?,?,?,?) ON CONFLICT(link_id,tab) DO UPDATE SET gid=excluded.gid, header_json=excluded.header_json, header_row=excluded.header_row")
     .run(c.linkId, plan.tab.title, plan.tab.gid, JSON.stringify(plan.tab.header), plan.tab.headerRow);
+  const saveAttrs = (pid: string | null, row: HubRow, reread: boolean) => {
+    if (!pid) return;
+    upsertAttributes(db, pid, row.cityAttrs, "city"); upsertAttributes(db, pid, row.sheetAttrs, "sheet");
+    if (reread) db.prepare("UPDATE participant_attributes SET ai_checked_at=NULL WHERE participant_id=?").run(pid); // new text: the notes are read again for missing details
+  };
   for (const k of plan.keep) {
     db.prepare("UPDATE sheet_rows SET row_number=?, cells_json=?, state='live', removed_at=NULL, updated_at=? WHERE id=?").run(k.row.row, JSON.stringify(k.row.display), now(), k.old.id);
+    saveAttrs(k.old.participant_id, k.row, false); // a changed Age, Tier or State cell is picked up without reading the text again
     c.counts.unchanged++;
   }
   for (const e of plan.edits) {
@@ -220,6 +234,7 @@ export function applyHub(c: IngestCtx, plan: HubPlan) {
     if ((o.hash2 ?? "") !== e.row.nHash) { c.rejectSource(s2, o.id); const x = part(e.row, "notes", pid); s2 = x?.sourceId ?? null; pid = pid ?? x?.participantId ?? null; if (x?.existing) c.counts.linked++; }
     db.prepare("UPDATE sheet_rows SET row_number=?, content_hash=?, hash2=?, source_id=?, source2_id=?, participant_id=?, cells_json=?, state='live', removed_at=NULL, updated_at=? WHERE id=?")
       .run(e.row.row, e.row.tHash, e.row.nHash || null, s1, s2, pid, JSON.stringify(e.row.display), now(), o.id);
+    saveAttrs(pid, e.row, true);
     c.counts.edited++;
   }
   for (const row of plan.adds) {
@@ -229,6 +244,7 @@ export function applyHub(c: IngestCtx, plan: HubPlan) {
     const pid = t?.participantId || n?.participantId || null;
     db.prepare("INSERT INTO sheet_rows(link_id,tab,row_number,content_hash,hash2,source_id,source2_id,external_id,participant_id,cells_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
       .run(c.linkId, plan.tab.title, row.row, row.tHash, row.nHash || null, t?.sourceId ?? null, n?.sourceId ?? null, row.id, pid, JSON.stringify(row.display), now());
+    saveAttrs(pid, row, true);
     if ((t && !t.existing) || (n && !n.existing)) c.counts.added++;
   }
   for (const rem of plan.removes) {

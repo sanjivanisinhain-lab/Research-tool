@@ -17,6 +17,7 @@ import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
 import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
 import { createLink, listLinks, sheetRefs, sheetRow, sheetView, syncSheet } from "./sheets";
 import { addNamesToTerms } from "./sheetsHub";
+import { cleanFilter, describeFilter, facets, filterId, filterParticipants, isEmptyFilter, type AudienceFilter } from "./attributes";
 import { clearPending, loadPending } from "./sheetsFile";
 import { fetchFigmaFrames, FigmaError, type FigmaFetch } from "./figma";
 import { chatWithPersona, conversation, latestPersona } from "./ai/personaChat";
@@ -237,6 +238,20 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   const latestRun = () => (db.prepare("SELECT id, created_at c FROM synthesis_runs ORDER BY id DESC LIMIT 1").get() as { id: number; c: string } | undefined);
   const statuses = () => (opts.includeUnreviewed ? ["approved", "pending"] : ["approved"]);
 
+  /** An audience picked by details. It is not an AI profile: it says who it is and shows a few of their own words. */
+  function customProfile(id: string): AudienceProfile | null {
+    const row = db.prepare("SELECT id, name, filter_json j, created_at c FROM custom_audiences WHERE id=?").get(id) as { id: string; name: string; j: string; c: string } | undefined;
+    if (!row) return null;
+    const f = cleanFilter(JSON.parse(row.j)); const members = filterParticipants(db, f);
+    const ev = members.length ? (db.prepare(`SELECT e.original_text q, e.translation tr, e.participant_id p, s.original_language l, s.id sid FROM evidence e JOIN sources s ON s.id=e.source_id WHERE e.participant_id IN (${members.map(() => "?").join(",")}) AND e.status IN (${statuses().map(() => "?").join(",")}) AND e.provenance='participant_verbatim' LIMIT 40`).all(...members, ...statuses()) as any[]) : [];
+    return {
+      ref: { kind: "custom", id, name: row.name, participants: members.length }, initials: "CU", description: `${describeFilter(f)}. Everyone in the research who matches these details today, not an AI-made profile.`,
+      evidenceStrength: sampleStrength(members.length), corePatterns: 0, sources: new Set(ev.map((e) => e.sid)).size, updatedAt: row.c,
+      definingBehaviours: [], needs: [], painPoints: [], gaps: [],
+      language: ev.slice(0, 4).map((e) => ({ quote: e.q, lang: e.l as "en" | "hi" | "hinglish", translation: e.tr ?? undefined, participantId: e.p })),
+    };
+  }
+
   function audienceProfile(kind: "segment" | "persona", id: string): AudienceProfile | null {
     const run = latestRun(); if (!run) return null;
     const isP = kind === "persona";
@@ -269,15 +284,56 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   });
 
   app.get("/api/audiences", (_req, res) => {
-    const run = latestRun(); if (!run) return res.json([]);
-    const segs = (db.prepare("SELECT id FROM segments WHERE run_id=?").all(run.id) as { id: string }[]).map((r) => audienceProfile("segment", r.id));
-    const pers = (db.prepare("SELECT id FROM personas WHERE run_id=?").all(run.id) as { id: string }[]).map((r) => audienceProfile("persona", r.id));
-    res.json([...segs, ...pers].filter(Boolean));
+    const run = latestRun();
+    const segs = run ? (db.prepare("SELECT id FROM segments WHERE run_id=?").all(run.id) as { id: string }[]).map((r) => audienceProfile("segment", r.id)) : [];
+    const pers = run ? (db.prepare("SELECT id FROM personas WHERE run_id=?").all(run.id) as { id: string }[]).map((r) => audienceProfile("persona", r.id)) : [];
+    const custom = (db.prepare("SELECT id FROM custom_audiences ORDER BY created_at DESC").all() as { id: string }[]).map((r) => customProfile(r.id)); // these do not depend on any rebuild
+    res.json([...segs, ...pers, ...custom].filter(Boolean));
   });
   app.get("/api/audiences/:kind/:id", (req, res) => {
+    if (req.params.kind === "custom") { const c = customProfile(String(req.params.id)); return c ? res.json(c) : res.status(404).end(); }
     if (req.params.kind !== "segment" && req.params.kind !== "persona") return res.status(404).end();
     const a = audienceProfile(req.params.kind, String(req.params.id));
     return a ? res.json(a) : res.status(404).end();
+  });
+  // ---------- Audiences picked by details (age, tier, state, how they pay) ----------
+  app.get("/api/attributes/facets", (_req, res) => res.json(facets(db)));
+  /** How many people match, and how many could match if their details were known. Unknown details are never guessed in. */
+  app.post("/api/audiences/custom/preview", (req, res) => {
+    const f = cleanFilter(req.body?.filter);
+    const rows = db.prepare("SELECT p.id, a.* FROM participants p LEFT JOIN participant_attributes a ON a.participant_id=p.id").all() as Record<string, any>[];
+    let matching = 0, undetermined = 0;
+    for (const r of rows) {
+      let unknown = false, miss = false;
+      const test = (known: boolean, ok: boolean) => { if (!known) unknown = true; else if (!ok) miss = true; };
+      if (f.ageMin !== undefined || f.ageMax !== undefined) test(r.age != null, r.age != null && (f.ageMin === undefined || r.age >= f.ageMin) && (f.ageMax === undefined || r.age <= f.ageMax));
+      if (f.tiers) test(r.tier != null, f.tiers.includes(r.tier));
+      if (f.states) test(r.state != null, f.states.includes(r.state));
+      if (f.genders) test(r.gender != null, f.genders.includes(r.gender));
+      if (f.customers) test(r.customer != null, f.customers.includes(r.customer));
+      if (f.payments) test(r.payment != null, r.payment === "both" || f.payments.includes(r.payment));
+      if (miss) continue;
+      if (unknown) undetermined++; else matching++;
+    }
+    res.json({ matching, undetermined, total: rows.length, name: describeFilter(f), empty: isEmptyFilter(f) });
+  });
+  app.post("/api/audiences/custom", (req, res) => {
+    const f: AudienceFilter = cleanFilter(req.body?.filter);
+    if (isEmptyFilter(f)) return res.status(400).json({ error: "choose at least one detail to filter by" });
+    const id = filterId(f);
+    const name = (typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : describeFilter(f)).slice(0, 100);
+    db.prepare("INSERT OR IGNORE INTO custom_audiences(id,name,filter_json,created_by,created_at) VALUES (?,?,?,?,?)").run(id, name, JSON.stringify(f), req.user!.id, new Date().toISOString());
+    const p = customProfile(id)!;
+    audit(db, "custom_audience.saved", { id, by: req.user!.id });
+    res.json(p.ref);
+  });
+  app.delete("/api/audiences/custom/:id", (req, res) => {
+    const id = String(req.params.id);
+    const row = db.prepare("SELECT created_by c FROM custom_audiences WHERE id=?").get(id) as { c: string | null } | undefined;
+    if (!row) return res.status(404).end();
+    if (req.user!.role !== "admin" && row.c !== req.user!.id) return res.status(403).json({ error: "only the person who saved it, or an admin, can remove it" });
+    db.prepare("DELETE FROM custom_audiences WHERE id=?").run(id);
+    res.json({ ok: true });
   });
   app.post("/api/audiences/count", (req, res) => {
     const aud = Array.isArray(req.body?.audience) ? (req.body.audience as AudienceRef[]) : [];

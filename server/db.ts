@@ -67,6 +67,7 @@ export function openDb(file = process.env["DB_PATH"] ?? `${process.env["DATA_DIR
   migrateV11(db);
   db.exec(SCHEMA_V12);
   migrateV13(db);
+  db.exec(SCHEMA_V14);
   return db;
 }
 
@@ -284,6 +285,30 @@ export function migrateV13(db: Db) {
   add("sheet_links", "ignored_json", "TEXT NOT NULL DEFAULT '[]'"); // words the admin said are not names
   db.exec("CREATE INDEX IF NOT EXISTS idx_sheet_rows_ext ON sheet_rows(link_id, tab, external_id)");
 }
+
+/** Who each participant is, for building audiences by filter. Each value remembers where it came from. */
+export const SCHEMA_V14 = `
+CREATE TABLE IF NOT EXISTS participant_attributes (
+  participant_id TEXT PRIMARY KEY REFERENCES participants(id) ON DELETE CASCADE,
+  age INTEGER, age_src TEXT,
+  tier TEXT, tier_src TEXT,
+  state TEXT, state_src TEXT,
+  gender TEXT, gender_src TEXT,
+  payment TEXT, payment_src TEXT,
+  customer TEXT, customer_src TEXT,
+  ai_checked_at TEXT,                -- when the notes were last read for missing details
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_attr_tier ON participant_attributes(tier);
+CREATE INDEX IF NOT EXISTS idx_attr_state ON participant_attributes(state);
+CREATE TABLE IF NOT EXISTS custom_audiences (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  filter_json TEXT NOT NULL,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+`;
 
 export function migrateV4(db: Db) {
   const srcCols = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];

@@ -2,7 +2,7 @@
 
 export type Signal = "strong" | "mixed" | "risk";
 export type ClaimLabel = "evidence" | "inference" | "no_evidence";
-export type AudienceKind = "segment" | "persona";
+export type AudienceKind = "segment" | "persona" | "custom"; // custom = picked by details such as age, tier, state or how they pay
 export type AudienceRef = { kind: AudienceKind; id: string; name: string; participants: number };
 export type Role = "designer" | "researcher" | "pm" | "marketing" | "cx" | "other";
 
