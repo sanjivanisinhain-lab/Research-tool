@@ -25,7 +25,7 @@ const SYS_ANSWER = `You answer a product team's question about a user audience u
 - implications: for each role, keep / change / watch (one short sentence each; designer, researcher, pm, marketing, cx, other).
 - headline: a direct answer in under 12 words. It MUST agree with your own signals: if most relevant participants signal negative, the headline says the likely reaction is negative (and vice versa); only say "mixed" if the signals are genuinely split. summary: 1-3 sentences, also consistent with the signals. Quote nothing yourself; quotes are shown separately.
 - Items marked [overview] are a general sample of the audience's research, not matched to your question: use them for broad questions (typical behaviour, habits) by summarising the recurring themes they show; for a specific question they are not evidence unless they actually address it.
-- coverage: "direct" if the evidence speaks to what was actually asked; "general" if it only gives related background (for example the question is about one specific feature or situation and the evidence is about shopping habits in general). When "general", coverage_note is one plain sentence saying what the research does not cover. Be strict: do not say "direct" just because the topic is nearby.
+- coverage: "direct" if some of the evidence is about the very subject of the question, even when it is incomplete (gaps belong under unknowns, not here). "general" ONLY if none of the evidence is about that subject and you can only offer related background (for example the question is about gift buying and the evidence is about shopping habits in general). When "general", coverage_note is one plain sentence saying what the research does not cover.
 - Be tentative when the evidence is thin.`;
 
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };
@@ -55,6 +55,7 @@ export type AskOpts = { question: string; audience: AudienceRef[]; includeUnrevi
 type Assessed = {
   raw: Raw; conf: ReturnType<typeof computeConfidence>; confidence: Answer["confidence"];
   patterns: Pattern[]; conflict?: { title: string; body: string; evidenceIds: string[] };
+  direct: number; // participants whose cited evidence was found by matching the question's own words (not the general overview sample)
   evidenceStances: Record<string, "supports" | "contradicts">; sources: number; implications: Implications; empty: boolean;
 };
 
@@ -67,7 +68,7 @@ async function assessAudience(db: Db, ai: AiProvider, o: { question: string; sco
   const hits = gathered.hits;
   if (!hits.length) {
     const conf = computeConfidence([], o.now);
-    return { raw: { headline: "", summary: "", signals: [], patterns: [], unknowns: [], implications: emptyImps() }, conf, confidence: toConfidence(conf), patterns: [], evidenceStances: {}, sources: 0, implications: emptyImps(), empty: true };
+    return { raw: { headline: "", summary: "", signals: [], patterns: [], unknowns: [], implications: emptyImps() }, conf, confidence: toConfidence(conf), patterns: [], evidenceStances: {}, sources: 0, implications: emptyImps(), empty: true, direct: 0 };
   }
   const byId = new Map(hits.map((h) => [h.id, h]));
   const raw = await ai.generateJson<Raw>({ system: SYS_ANSWER, schema: SCHEMA_ANSWER,
@@ -95,7 +96,8 @@ async function assessAudience(db: Db, ai: AiProvider, o: { question: string; sco
   const conflict = raw.conflict && valid(raw.conflict.evidence_ids).length ? { title: raw.conflict.title, body: raw.conflict.body, evidenceIds: valid(raw.conflict.evidence_ids) } : undefined;
   const cited = new Set([...patterns.flatMap((p) => p.evidenceIds), ...(conflict?.evidenceIds ?? [])].map(Number));
   const sources = new Set([...cited].map((i) => byId.get(i)!.sourceId)).size;
-  return { raw, conf, confidence: toConfidence(conf), patterns, conflict, evidenceStances, sources, implications: { ...emptyImps(), ...raw.implications }, empty: false };
+  const direct = new Set([...cited].filter((i) => !byId.get(i)!.overview).map((i) => byId.get(i)!.participantId)).size;
+  return { raw, conf, confidence: toConfidence(conf), patterns, conflict, evidenceStances, sources, implications: { ...emptyImps(), ...raw.implications }, empty: false, direct };
 }
 
 function save(db: Db, result: Answer, includeUnreviewed?: boolean) {
@@ -104,12 +106,14 @@ function save(db: Db, result: Answer, includeUnreviewed?: boolean) {
   audit(db, "answer", { id: result.id, variant: result.variant, participants: result.confidence.participants, score: result.confidence.score });
 }
 
+const DIRECT_ENOUGH = 3;
 type Base = Pick<Answer, "id" | "question" | "audience" | "savedAt" | "evidenceStatus"> & { autoAudience?: boolean };
 /** Turn an assessed audience into the answer people see: none, too thin to predict, or a normal answer (with a flag when it is only general background). */
 function composeAnswer(base: Base, a: Assessed): Answer {
   if (a.empty) return insufficient(base, a.confidence, "We don't have research that speaks to this question for this audience.");
   if (a.conf.withheld) return { ...insufficient(base, a.confidence, "The evidence we have is too thin to predict a reaction."), known: a.patterns.map((p) => ({ title: p.title, body: p.summary, label: p.label, evidenceIds: p.evidenceIds })), unknowns: a.raw.unknowns ?? [], sources: a.sources, implications: a.implications, evidenceStances: a.evidenceStances };
-  const general = a.raw.coverage === "general";
+  // Counted here, not left to the AI: if at least 3 people's evidence found by the question's own words backs the answer, the research does speak to it.
+  const general = a.raw.coverage === "general" && a.direct < DIRECT_ENOUGH;
   return { ...base, variant: "standard", headline: a.raw.headline, summary: a.raw.summary, direction: a.conf.direction, confidence: a.confidence, sources: a.sources, patterns: a.patterns, conflict: a.conflict, evidenceStances: a.evidenceStances, unknowns: a.raw.unknowns ?? [], implications: a.implications,
     ...(general ? { coverage: "general" as const, coverageNote: (a.raw.coverage_note ?? "").trim() || "The research we have only covers this in general terms." } : {}) };
 }
