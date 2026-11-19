@@ -223,7 +223,7 @@ function StatusStrip() {
       {rebuild.isError && <p className="mt-2 text-xs text-risk">{(rebuild.error as Error).message}</p>}
       {rebuild.isSuccess && <p className="mt-2 text-xs text-muted-foreground">Rebuilding segments and personas from approved evidence. This takes a few minutes.</p>}
       {jobs.data?.recentFailures.slice(0, 3).map((f) => (
-        <div key={f.id} className="mt-2 flex items-center gap-3 text-xs"><span className="text-risk">{f.kind === "extract" ? "Reading a source" : "Rebuilding audiences"} failed: {f.error}</span><button className="font-medium underline" onClick={() => retry.mutate(f.id)}>Retry</button></div>
+        <div key={f.id} className="mt-2 flex items-center gap-3 text-xs"><span className={f.retrying ? "text-mixed" : "text-risk"}>{f.kind === "extract" ? "Reading a source" : "Rebuilding audiences"} {f.retrying ? "hit a problem" : "failed"}: {f.error}</span>{!f.retrying && <button className="font-medium underline" onClick={() => retry.mutate(f.id)}>Retry</button>}</div>
       ))}
     </div>
   );

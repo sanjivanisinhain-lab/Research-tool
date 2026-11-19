@@ -97,7 +97,8 @@ describe("format detection and jobs", () => {
     let fail = true;
     const ai = new MockProvider(() => { if (fail) throw new Error("boom"); return { findings: [] }; });
     await runNextJob(d, ai);
-    expect(d.prepare("SELECT status, error FROM jobs").get()).toEqual({ status: "failed", error: "boom" });
+    expect(d.prepare("SELECT status, error FROM jobs").get()).toMatchObject({ status: "queued", error: expect.stringContaining("boom") }); // waits and tries again by itself
+    d.prepare("UPDATE jobs SET status='failed', attempts=4").run(); // after its last try it is shown as failed
     fail = false; expect(retryJob(d, 1)).toBe(true);
     await runNextJob(d, ai);
     expect(d.prepare("SELECT status FROM jobs").get()).toEqual({ status: "done" });

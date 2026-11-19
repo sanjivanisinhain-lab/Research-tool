@@ -2,7 +2,7 @@ import { audit, type Db } from "../db";
 import type { AiProvider } from "./provider";
 
 export const PROMPT_VERSION = "extract-v2";
-const MAX_CHUNK_CHARS = 3500;
+const MAX_CHUNK_CHARS = 9000; // one call per chunk: long transcripts used to take dozens of calls, which is what made reading slow
 
 type Utt = { id: number; speaker: string; text: string };
 export type Finding = {

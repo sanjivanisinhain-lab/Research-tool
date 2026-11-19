@@ -26,12 +26,14 @@ export function enqueueRebuild(db: Db): number {
   return Number(db.prepare("INSERT INTO jobs(kind,created_at) VALUES ('rebuild_audiences',?)").run(new Date().toISOString()).lastInsertRowid);
 }
 export function retryJob(db: Db, id: number): boolean {
-  return Number(db.prepare("UPDATE jobs SET status='queued', error=NULL, started_at=NULL, finished_at=NULL WHERE id=? AND status='failed'").run(id).changes) > 0;
+  return Number(db.prepare("UPDATE jobs SET status='queued', error=NULL, started_at=NULL, finished_at=NULL, attempts=0, run_after=NULL WHERE id=? AND status='failed'").run(id).changes) > 0;
 }
+/** After a failure (usually Gemini being busy or out of quota) a job waits and is tried again by itself: 3, 6, 12 then 24 minutes. */
+export const RETRY_MINUTES = [3, 6, 12, 24];
 
 /** Run the oldest queued job. Returns true if one ran. Jobs that die with the process are re-queued at startup. */
 export async function runNextJob(db: Db, ai: AiProvider): Promise<boolean> {
-  const job = db.prepare("SELECT id, kind, source_id, payload FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").get() as { id: number; kind: string; source_id: string | null; payload: string | null } | undefined;
+  const job = db.prepare("SELECT id, kind, source_id, payload, attempts FROM jobs WHERE status='queued' AND (run_after IS NULL OR run_after <= ?) ORDER BY id LIMIT 1").get(new Date().toISOString()) as { id: number; kind: string; source_id: string | null; payload: string | null; attempts: number } | undefined;
   if (!job) return false;
   db.prepare("UPDATE jobs SET status='running', started_at=? WHERE id=?").run(new Date().toISOString(), job.id);
   try {
@@ -46,7 +48,10 @@ export async function runNextJob(db: Db, ai: AiProvider): Promise<boolean> {
     } else { await canonicaliseThemes(db, ai); await synthesise(db, ai); }
     db.prepare("UPDATE jobs SET status='done', finished_at=? WHERE id=?").run(new Date().toISOString(), job.id);
   } catch (e) {
-    db.prepare("UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?").run((e as Error).message.slice(0, 300), new Date().toISOString(), job.id);
+    const msg = (e as Error).message.slice(0, 300);
+    const wait = job.kind === "transcribe" ? undefined : RETRY_MINUTES[job.attempts]; // recordings are expensive to send again: those wait for a person to retry
+    if (wait !== undefined) db.prepare("UPDATE jobs SET status='queued', attempts=?, run_after=?, error=?, started_at=NULL WHERE id=?").run(job.attempts + 1, new Date(Date.now() + wait * 60_000).toISOString(), `${msg} (will try again in ${wait} minutes)`, job.id);
+    else db.prepare("UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?").run(msg, new Date().toISOString(), job.id);
   }
   return true;
 }

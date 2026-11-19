@@ -274,6 +274,8 @@ export function migrateV13(db: Db) {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
     if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
   };
+  add("jobs", "attempts", "INTEGER NOT NULL DEFAULT 0");   // reading a source that failed is tried again later, a few times
+  add("jobs", "run_after", "TEXT");                          // not before this time
   add("sheet_rows", "external_id", "TEXT");        // the Participant ID written in the sheet
   add("sheet_rows", "participant_id", "TEXT");     // the tool's participant for this row
   add("sheet_rows", "source2_id", "TEXT");         // notes source, when the row has a transcript too (source_id is the transcript)

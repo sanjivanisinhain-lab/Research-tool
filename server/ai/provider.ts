@@ -18,7 +18,7 @@ export interface AiProvider {
 /** Google Gemini over REST. The key goes in a request header by default (URLs end up in logs); GEMINI_KEY_IN_URL=1 sends it as a URL parameter instead, for networks whose proxy strips the header. Never logged. */
 export class GeminiProvider implements AiProvider {
   readonly name = "gemini";
-  constructor(private apiKey: string, readonly model = process.env.GEMINI_MODEL ?? "gemini-3.5-flash-lite", private minGapMs = 6500, readonly transcribeModel = process.env.GEMINI_TRANSCRIBE_MODEL ?? "gemini-3.5-flash") {}
+  constructor(private apiKey: string, readonly model = process.env.GEMINI_MODEL ?? "gemini-3.5-flash-lite", private minGapMs = Number(process.env["GEMINI_MIN_GAP_MS"] ?? 6500), readonly transcribeModel = process.env.GEMINI_TRANSCRIBE_MODEL ?? "gemini-3.5-flash") {}
   private last = 0;
 
   generateJson<T>(req: JsonRequest): Promise<T> { return this.call<T>(req, [], this.model); }

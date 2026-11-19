@@ -114,7 +114,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.get("/api/admin/jobs", (_req, res) => {
     res.json({
       counts: db.prepare("SELECT status, COUNT(*) n FROM jobs GROUP BY status").all(),
-      recentFailures: db.prepare("SELECT id, kind, source_id AS sourceId, error FROM jobs WHERE status='failed' ORDER BY id DESC LIMIT 20").all(),
+      recentFailures: db.prepare("SELECT id, kind, source_id AS sourceId, error, (status='queued') AS retrying FROM jobs WHERE status='failed' OR (status='queued' AND attempts>0) ORDER BY (status='failed') DESC, id DESC LIMIT 20").all(),
       transcriptions: (db.prepare("SELECT id, status, note, created_at AS createdAt, payload FROM jobs WHERE kind='transcribe' AND status IN ('queued','running') ORDER BY id").all() as { id: number; status: string; note: string; createdAt: string; payload: string }[])
         .map((j) => ({ id: j.id, status: j.status, note: j.note, createdAt: j.createdAt, study: (JSON.parse(j.payload) as { study: string }).study })),
       aiConfigured: !!opts.ai,
