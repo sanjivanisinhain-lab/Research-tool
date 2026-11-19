@@ -83,7 +83,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     const q = req.query;
     const study = String(q.study ?? "").trim().slice(0, 120);
     const filename = String(q.filename ?? "");
-    if (!study) return res.status(400).json({ error: "study name required" });
+    if (!study && !/\.(xlsx|csv)$/i.test(filename)) return res.status(400).json({ error: "study name required" }); // a sheet can name each row's study itself
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "empty file" });
     const date = typeof q.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : null;
     const result = await processUpload(db, { name: filename, buf: req.body }, {

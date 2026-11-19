@@ -29,6 +29,7 @@ let db: Db; let server: Server; let base = ""; let dir: string;
 beforeEach(() => { db = openDb(":memory:"); dir = fs.mkdtempSync(path.join(os.tmpdir(), "rh-up-")); server = createApp(db, { auth: { authDisabled: true }, termsPath: path.join(dir, "terms.json"), pendingDir: path.join(dir, "pending") }).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`; });
 afterEach(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 const put = (buf: Buffer, name = "Research data hub.xlsx") => fetch(`${base}/api/admin/upload?study=x&product=p&kind=cx_call&filename=${encodeURIComponent(name)}`, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: buf as unknown as BodyInit });
+const putNoStudy = (buf: Buffer, name: string) => fetch(`${base}/api/admin/upload?product=p&kind=cx_call&filename=${encodeURIComponent(name)}`, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: buf as unknown as BodyInit });
 const post = (p: string, b: unknown) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
 const info = async () => (await (await fetch(base + "/api/admin/sheets")).json()) as { configured: boolean; links: any[] };
 
@@ -91,6 +92,14 @@ describe("a participant sheet uploaded as an Excel file", () => {
     expect(r.status).toBe(422); expect((await r.json()).error).toMatch(/Upload it again/);
   });
 
+  it("needs no study name for a sheet that carries its own Study column, but still asks for one for other files", async () => {
+    const ok = await putNoStudy(await xlsx(grid()), "hub.xlsx");
+    expect(ok.status).toBe(200); expect(await ok.json()).toMatchObject({ status: "review" });
+    const calls = await putNoStudy(Buffer.from("Name,City,Product Name,Date,Notes\nRenu,Jaipur,Saree,12-11-2026,\"Renu ji bola discount dekhti hoon\""), "calls.csv");
+    expect(calls.status).toBe(422); expect((await calls.json()).message).toMatch(/needs a study name/); // a call-notes sheet has no Study column
+    const txt = await putNoStudy(Buffer.from("Interviewer: hi\nParticipant: hello there"), "talk.txt");
+    expect(txt.status).toBe(400); // a transcript still needs one
+  });
   it("also reads a CSV export of that tab, and still reads old call-notes files the old way", async () => {
     const csv = grid().map((r) => r.map((c) => `"${String(c instanceof Date ? "2026-11-04" : c).replace(/"/g, '""')}"`).join(",")).join("\n");
     const r = await (await put(Buffer.from(csv), "hub.csv")).json();

@@ -55,6 +55,7 @@ async function ingestText(db: Db, text: string, meta: UploadMeta, noisyHint = fa
 }
 
 function ingestCsvText(db: Db, csv: string, meta: UploadMeta): IngestResult | null {
+  if (!meta.study.trim()) throw new Error("This is a call-notes sheet (no Participant ID column), so it needs a study name. Type one above and upload it again.");
   const head = Papa.parse<string[]>(csv, { preview: 1 }).data[0] ?? [];
   if (!head.some((h) => (CALL_COLUMNS[String(h).trim().toLowerCase()] ?? "") === "Notes")) return null;
   return ingestCallsCsv(db, csv, { studyName: meta.study, product: meta.product, termsPath: meta.termsPath, submittedBy: "research_team" });

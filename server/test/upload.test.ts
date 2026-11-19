@@ -52,7 +52,8 @@ describe("upload endpoint", () => {
     expect(noNotes).toMatchObject({ status: "failed" });
     expect(noNotes.message).toMatch(/Notes/);
     expect((await put("study=S&filename=z.zip", Buffer.from("x"))).status).toBe(422);
-    expect((await put("study=&filename=a.csv", CSV)).status).toBe(400);
+    expect((await put("study=&filename=a.csv", CSV)).status).toBe(422); // a call-notes sheet with no study name: it says so (a sheet with its own Study column does not need one)
+    expect((await put("study=&filename=a.txt", "Meera said hi")).status).toBe(400);
   });
   it("plain text notes become trusted researcher notes with the names you give removed", async () => {
     const r = await put("study=Notes&kind=cx_call&names=Meera&filename=n.txt", "Meera said the delivery was late again and she will not order.");

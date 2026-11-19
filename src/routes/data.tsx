@@ -244,7 +244,8 @@ function UploadTab() {
   const set = (k: keyof typeof meta) => (e: { target: { value: string } }) => setMeta((m) => ({ ...m, [k]: e.target.value }));
 
   async function run(files: File[]) {
-    if (!meta.study.trim()) { setRows((r) => [...r, { name: "", state: "done", error: "Enter a study name first, so these files are grouped correctly." }]); return; }
+    // A spreadsheet can carry its own Study column (one per person), so the box is only required for other files.
+    if (!meta.study.trim() && files.some((f) => !/\.(xlsx|csv)$/i.test(f.name))) { setRows((r) => [...r, { name: "", state: "done", error: "Enter a study name first, so these files are grouped correctly. (Not needed for an Excel or CSV sheet that has a Study column.)" }]); return; }
     const offset = rows.length; // keep earlier results visible; new uploads are added below them
     setRows((r) => [...r, ...files.map((f): Row => ({ name: f.name, state: "waiting" }))]);
     const patch = (i: number, p: Partial<Row>) => setRows((r) => r.map((x, j) => (j === offset + i ? { ...x, ...p } : x)));
@@ -260,7 +261,7 @@ function UploadTab() {
   return (
     <div className="mt-6 grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
       <div className="space-y-4 rounded-2xl border bg-card p-5">
-        <Label text="Study name *" hint="Groups files, e.g. “Snapdeal CX calls (Nov 2026)”. For a participant sheet, each row's Study column is used instead, so type anything here.">
+        <Label text="Study name" hint="Groups files, e.g. “Snapdeal CX calls (Nov 2026)”. Needed for transcripts and notes files. Leave it empty for an Excel or CSV sheet with a Study column: each row's own study is used.">
           <input list="studies" className={field} value={meta.study} onChange={set("study")} placeholder="Snapdeal CX calls" />
           <datalist id="studies">{studies.map((s) => <option key={s} value={s} />)}</datalist>
         </Label>
