@@ -22,6 +22,10 @@ The tool can read a Google Sheet of call notes every few minutes. New rows are a
 
 Header row (top five rows) with **Participant ID** and a **Transcript** and/or **Notes** column. Other columns that are read: Data available, Study, Name, Number, City, Call date, Call status. A column called Match check is never shown.
 
+- **Who they are (optional columns).** **Age** (a number, such as 28), **Tier** (Tier 1, 2 or 3), **State**, **Gender**, **Payment type** (COD, Prepaid or both) and **Customer type** (New or Repeat). They are used to build audiences by details. A band such as "25-34" is not an age and is left unknown.
+  - A value typed in the sheet always wins. Where a cell is blank, the **City** is turned into a state and a tier here and then discarded, so a city is never stored. Cities the tool does not recognise, or that exist in more than one state (add the state code, for example `Pratapgarh_UP`), stay unknown.
+  - Still blank? The tool reads the notes in the background and keeps a detail only if the notes state it plainly about the person and the exact words are quoted. Nothing is guessed.
+  - Changing these cells later updates the details without reading the transcripts again.
 - **Data available** says what to read: "Transcript only", "Notes only" or "Transcript + notes". Notes on a transcript-only row are treated as processing comments and are not read as research.
 - Each row names its own **Study**.
 - A row is recognised by its **Participant ID**, so rows can be sorted or moved freely. Changing a transcript or notes cell reads only that part again.

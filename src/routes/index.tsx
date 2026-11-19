@@ -56,6 +56,7 @@ function AskPage() {
   useEffect(() => {
     if (initialized.current || !audiences.data) return;
     const chosen = audiences.data.find((a) => a.ref.id === pre);
+    if (pre && !chosen) return; // a just-saved audience may not be in the list yet: wait for the next load
     if (chosen) { setAudience([chosen.ref]); setAuto(false); }
     initialized.current = true;
   }, [audiences.data, pre]);

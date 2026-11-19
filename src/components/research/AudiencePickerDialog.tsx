@@ -4,7 +4,9 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { useAudiences, useParticipantCount } from "@/api/hooks";
-import type { AudienceRef } from "@/types/research";
+import type { AudienceKind, AudienceRef } from "@/types/research";
+import { CustomAudienceBuilder } from "./CustomAudienceBuilder";
+import { IS_MOCK } from "@/config/dataMode";
 import { cn } from "@/lib/utils";
 import { ErrorState, Eyebrow } from "./primitives";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +30,7 @@ export function AudiencePickerDialog({
   const [sel, setSel] = useState<AudienceRef[]>(value);
   const [m, setM] = useState<AudienceMode>(mode);
   const [search, setSearch] = useState("");
+  const [building, setBuilding] = useState(false);
   useEffect(() => { if (open) { setSel(value); setM(mode); setSearch(""); } }, [open, value, mode]);
   const count = useParticipantCount(sel);
   const list = useMemo(
@@ -37,7 +40,7 @@ export function AudiencePickerDialog({
   const toggle = (r: AudienceRef) => setSel((s) => (s.some((x) => x.id === r.id) ? s.filter((x) => x.id !== r.id) : [...s, r]));
   const summary = sel.length === 0 ? "No audience selected" : sel.length === 1 ? sel[0]?.name : m === "compare" ? `Comparing ${sel.length} audiences` : `${sel.length} audiences combined`;
 
-  const group = (kind: "segment" | "persona", title: string, right: string) => {
+  const group = (kind: AudienceKind, title: string, right: string) => {
     const items = list.filter((a) => a.ref.kind === kind);
     return (
       <div className="mt-6">
@@ -51,8 +54,8 @@ export function AudiencePickerDialog({
                 <label className={cn("flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition", checked ? "border-foreground/20 bg-card" : "border-transparent hover:bg-card/70")}>
                   <Checkbox checked={checked} onCheckedChange={() => toggle(a.ref)} className="mt-0.5" />
                   <span className="min-w-0 flex-1">
-                    <span className={cn("inline-flex max-w-full flex-wrap items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium", kind === "segment" ? "border-segment/20 bg-segment-soft/50 text-segment" : "border-persona/20 bg-persona-soft/50 text-persona", checked && (kind === "segment" ? "border-segment/60 bg-segment-soft" : "border-persona/60 bg-persona-soft"))}>
-                      <span className={cn("size-2 rounded-full", kind === "segment" ? "bg-segment" : "bg-persona")} aria-hidden />
+                    <span className={cn("inline-flex max-w-full flex-wrap items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium", kind === "custom" ? "border-border bg-secondary text-foreground" : kind === "segment" ? "border-segment/20 bg-segment-soft/50 text-segment" : "border-persona/20 bg-persona-soft/50 text-persona", checked && (kind === "segment" ? "border-segment/60 bg-segment-soft" : "border-persona/60 bg-persona-soft"))}>
+                      <span className={cn("size-2 rounded-full", kind === "custom" ? "bg-foreground/50" : kind === "segment" ? "bg-segment" : "bg-persona")} aria-hidden />
                       {a.ref.name} <span className="border-l border-current/20 pl-2 font-normal tabular-nums">{a.ref.participants}</span>
                     </span>
                     <span className="mt-0.5 block text-sm text-muted-foreground">{a.description}</span>
@@ -86,7 +89,13 @@ export function AudiencePickerDialog({
           </div>
           {q.isLoading && <div className="mt-6 space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>}
           {q.isError && <div className="mt-6"><ErrorState onRetry={() => q.refetch()} /></div>}
-          {q.data && (<>{group("segment", "Participant segments", "Cohorts")}{group("persona", "Research-backed personas", "Behavioural profiles")}</>)}
+          {q.data && (<>{group("segment", "Participant segments", "Cohorts")}{group("persona", "Research-backed personas", "Behavioural profiles")}{list.some((a) => a.ref.kind === "custom") && group("custom", "Picked by details", "Age, tier, state, payment")}</>)}
+          {!IS_MOCK && (
+            <div className="mt-6 rounded-xl border p-4">
+              <button type="button" aria-expanded={building} onClick={() => setBuilding((b) => !b)} className="flex w-full items-center justify-between text-left text-sm font-semibold">Pick by details: age, tier, state, how they pay<span className="text-muted-foreground">{building ? "Hide" : "Open"}</span></button>
+              {building && <div className="mt-2"><CustomAudienceBuilder onUse={(ref) => { setSel((cur) => (cur.some((x) => x.id === ref.id) ? cur : [...cur, ref])); setBuilding(false); }} /></div>}
+            </div>
+          )}
           {m === "compare" && sel.length === 1 && <p className="mt-4 text-sm text-mixed">Pick at least two audiences to compare.</p>}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-card px-6 py-4">

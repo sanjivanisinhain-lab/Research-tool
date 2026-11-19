@@ -1,5 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { filtersApi } from "@/api/filters";
 import { useAudience } from "@/api/hooks";
 import { EmptyState, ErrorState, Eyebrow, LANG_LABEL, LoadingBlock } from "@/components/research/primitives";
 import { Button } from "@/components/ui/button";
@@ -22,6 +25,8 @@ function Card({ title, items, tone }: { title: string; items?: string[] | undefi
 
 function Detail() {
   const { kind, id } = Route.useParams();
+  const qc = useQueryClient(); const navigate = useNavigate();
+  const remove = useMutation({ mutationFn: () => filtersApi.remove(id), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["audiences"] }); navigate({ to: "/audiences" }); } });
   const q = useAudience(kind as AudienceKind, id);
   if (q.isLoading) return <LoadingBlock />;
   if (q.isError) return <ErrorState onRetry={() => q.refetch()} />;
@@ -36,7 +41,7 @@ function Detail() {
           <h1 className="mt-3 text-5xl font-semibold">{a.ref.name}</h1>
           <p className="mt-3 text-lg text-muted-foreground">{a.description}</p>
         </div>
-        <Button asChild className="rounded-full px-5"><Link to="/" search={{ audience: a.ref.id }}>Ask about this audience</Link></Button>
+        <div className="flex flex-wrap gap-2">{a.ref.kind === "custom" && <Button variant="outline" className="rounded-full px-5" disabled={remove.isPending} onClick={() => remove.mutate()}>Remove this audience</Button>}<Button asChild className="rounded-full px-5"><Link to="/" search={{ audience: a.ref.id }}>Ask about this audience</Link></Button></div>
       </div>
       <div className="mt-10 grid gap-4 lg:grid-cols-3">
         <div className="rounded-3xl bg-foreground p-6 text-background lg:row-span-2">
@@ -65,11 +70,11 @@ function Detail() {
             {a.saidVsDid.map((s) => <div key={s.said} className="mt-3 grid gap-3 sm:grid-cols-2"><p className="rounded-xl bg-secondary p-3 text-sm"><b>Said: </b>{s.said}</p><p className="rounded-xl bg-brand-soft/60 p-3 text-sm"><b>Did: </b>{s.did}</p></div>)}
           </div>
         ) : null}
-        <div className="rounded-2xl bg-unknown-soft p-5 lg:col-span-3">
+        {a.ref.kind !== "custom" && <div className="rounded-2xl bg-unknown-soft p-5 lg:col-span-3">
           <Eyebrow>Contradictions and gaps</Eyebrow>
           <p className="mt-2 font-semibold">Keep this profile provisional</p>
           <ul className="mt-2 list-disc pl-5 text-sm text-muted-foreground">{a.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
-        </div>
+        </div>}
       </div>
     </div>
   );
