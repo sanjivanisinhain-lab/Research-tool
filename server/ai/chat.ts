@@ -110,13 +110,14 @@ export class ChatProvider implements AiProvider {
   }
 }
 
-/** Reads AI_BASE_URL, AI_FORMAT, AI_MODEL, AI_MODEL_MEDIA and AI_API_KEY. */
+/** Reads AI_API_KEY / AI_BASE_URL / AI_FORMAT / AI_MODEL / AI_MODEL_MEDIA, or the ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL a company gateway hands out (always the Anthropic style). */
+export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5";
 export function chatProviderFromEnv(env: Record<string, string | undefined> = process.env): ChatProvider {
-  const key = env["AI_API_KEY"];
-  if (!key) throw new Error("AI_API_KEY is not set");
-  const baseUrl = env["AI_BASE_URL"] || "https://api.anthropic.com";
-  const format: ChatFormat = env["AI_FORMAT"] === "openai" ? "openai" : env["AI_FORMAT"] === "anthropic" ? "anthropic" : env["AI_BASE_URL"] ? "openai" : "anthropic";
-  const model = env["AI_MODEL"];
-  if (!model) throw new Error("AI_MODEL is not set (the Claude model name your gateway gives you)");
+  const key = env["AI_API_KEY"] || env["ANTHROPIC_API_KEY"];
+  if (!key) throw new Error("AI_API_KEY (or ANTHROPIC_API_KEY) is not set");
+  const viaAnthropicVars = !env["AI_API_KEY"] && !env["AI_BASE_URL"];
+  const baseUrl = env["AI_BASE_URL"] || env["ANTHROPIC_BASE_URL"] || "https://api.anthropic.com";
+  const format: ChatFormat = env["AI_FORMAT"] === "openai" ? "openai" : env["AI_FORMAT"] === "anthropic" || viaAnthropicVars || !env["AI_BASE_URL"] ? "anthropic" : "openai";
+  const model = env["AI_MODEL"] || env["ANTHROPIC_MODEL"] || DEFAULT_CLAUDE_MODEL;
   return new ChatProvider(key, model, { format, baseUrl, ...(env["AI_MODEL_MEDIA"] ? { mediaModel: env["AI_MODEL_MEDIA"] } : {}) });
 }

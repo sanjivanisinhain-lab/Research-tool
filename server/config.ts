@@ -27,7 +27,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     allowedEmailDomains: (env["ALLOWED_EMAIL_DOMAINS"] ?? "").split(",").map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean),
     setupCode: env["ADMIN_SETUP_CODE"] || undefined,
     rateAiPerHour: num(env["RATE_AI_PER_HOUR"], 60), rateNotesPerHour: num(env["RATE_NOTES_PER_HOUR"], 20),
-    includeUnreviewed: env["ALLOW_UNREVIEWED"] === "1", hasGeminiKey: !!(env["GEMINI_API_KEY"] || env["AI_API_KEY"]), figmaToken: env["FIGMA_TOKEN"] || undefined, sheetSyncMinutes: num(env["SHEET_SYNC_MINUTES"], 10),
+    includeUnreviewed: env["ALLOW_UNREVIEWED"] === "1", hasGeminiKey: !!(env["GEMINI_API_KEY"] || env["AI_API_KEY"] || env["ANTHROPIC_API_KEY"]), figmaToken: env["FIGMA_TOKEN"] || undefined, sheetSyncMinutes: num(env["SHEET_SYNC_MINUTES"], 10),
   };
 }
 

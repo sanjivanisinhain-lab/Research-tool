@@ -55,7 +55,9 @@ describe("Claude provider", () => {
   });
   it("reads its settings from the environment", () => {
     expect(() => chatProviderFromEnv({})).toThrow(/AI_API_KEY/);
-    expect(() => chatProviderFromEnv({ AI_API_KEY: "k" })).toThrow(/AI_MODEL/);
     expect(chatProviderFromEnv({ AI_API_KEY: "k", AI_MODEL: "m" }).model).toBe("m");
+    const g = chatProviderFromEnv({ ANTHROPIC_API_KEY: "k", ANTHROPIC_BASE_URL: "https://saarthi-gw.example/" }) as any; // what a company gateway hands out
+    expect(g.o).toMatchObject({ format: "anthropic", baseUrl: "https://saarthi-gw.example/" });
+    expect(g.model).toBe("claude-sonnet-5-5");
   });
 });

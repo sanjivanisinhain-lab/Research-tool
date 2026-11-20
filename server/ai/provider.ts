@@ -98,7 +98,7 @@ export class MockProvider implements AiProvider {
 
 /** AI_PROVIDER=claude (or an AI_API_KEY with no Gemini key) uses Claude through ./chat; otherwise Gemini. */
 export function providerFromEnv(): AiProvider {
-  const useClaude = process.env["AI_PROVIDER"] === "claude" || (!!process.env["AI_API_KEY"] && !process.env["GEMINI_API_KEY"] && process.env["AI_PROVIDER"] !== "gemini");
+  const useClaude = process.env["AI_PROVIDER"] === "claude" || (!!(process.env["AI_API_KEY"] || process.env["ANTHROPIC_API_KEY"]) && !process.env["GEMINI_API_KEY"] && process.env["AI_PROVIDER"] !== "gemini");
   if (useClaude) return chatProviderFromEnv();
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set (put it in .env, never in code)");
