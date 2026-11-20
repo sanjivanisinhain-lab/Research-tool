@@ -5,6 +5,7 @@ import type { Answer, EvidenceItem, FollowUp, Role } from "@/types/research";
 import { useEvidence } from "@/api/hooks";
 import { shouldWithhold } from "@/config/confidence";
 import { cn } from "@/lib/utils";
+import { cleanProse, stripEvidenceMarkers } from "@/lib/prose";
 import { AnswerHero, ConflictCard, DesignImplications, NextActions, Section, SignalPattern, UnknownCard } from "./AnswerParts";
 import { ConfidenceRing, EvidenceDirectionBar, MetricsCard } from "./Metrics";
 import { ClaimTag, SignalPill, Eyebrow, CitationChip } from "./primitives";
@@ -25,7 +26,8 @@ export function allEvidenceIds(a: Answer) {
   ];
 }
 
-export function AnswerView({ answer, role, onFollowUp = () => {}, onCompare = () => {}, onPlanTest = () => {}, onReviewQuestions, embedded = false }: { answer: Answer; role: Role; onFollowUp?: () => void; onCompare?: () => void; onPlanTest?: () => void; onReviewQuestions?: () => void; embedded?: boolean }) {
+export function AnswerView({ answer: rawAnswer, role, onFollowUp = () => {}, onCompare = () => {}, onPlanTest = () => {}, onReviewQuestions, embedded = false }: { answer: Answer; role: Role; onFollowUp?: () => void; onCompare?: () => void; onPlanTest?: () => void; onReviewQuestions?: () => void; embedded?: boolean }) {
+  const answer = useMemo(() => cleanProse(rawAnswer), [rawAnswer]); // older answers may still have evidence numbers in their sentences
   const ids = useMemo(() => allEvidenceIds(answer), [answer]);
   const ev = useEvidence(ids);
   const map = useMemo(() => new Map<string, EvidenceItem>((ev.data ?? []).map((e) => [e.id, e])), [ev.data]);
@@ -324,7 +326,7 @@ export function FollowUpThread({ followUps, pendingText, error, role }: { follow
               <div className="max-w-[88%]">
                 <div className="rounded-2xl rounded-bl-md border border-persona/15 bg-persona-soft/40 px-4 py-3">
                   <div className="mb-1.5"><ClaimTag label={f.label} /></div>
-                  <p className="leading-relaxed">{f.reply}</p>
+                  <p className="leading-relaxed">{stripEvidenceMarkers(f.reply)}</p>
                 </div>
                 {f.evidenceIds.length > 0 && <button type="button" onClick={() => drawer.open(f.evidenceIds)} className="mt-1.5 inline-flex items-center gap-1.5 px-1 text-xs font-medium text-persona hover:underline"><BookOpen className="size-3.5" />Evidence behind this response</button>}
               </div>

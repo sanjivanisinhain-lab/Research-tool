@@ -87,6 +87,8 @@ describe("evidence numbers never appear in prose", () => {
   it("strips bracketed and hash-style markers but leaves real numbers alone", () => {
     expect(stripEvidenceMarkers("Some of us wait for sales [468, 505, 773].")).toBe("Some of us wait for sales.");
     expect(stripEvidenceMarkers("We prefer COD (#12) mostly.")).toBe("We prefer COD mostly.");
+    expect(stripEvidenceMarkers("often finding inspiration through reels #575, #1824. Many rely on reviews #1836, #1994, #2061.")).toBe("often finding inspiration through reels. Many rely on reviews.");
+    expect(stripEvidenceMarkers("Prices matter (#12, #14) and trust matters too.")).toBe("Prices matter and trust matters too.");
     expect(stripEvidenceMarkers("Most wait 6 days and pay Rs 899 (about 40% do).")).toBe("Most wait 6 days and pay Rs 899 (about 40% do).");
   });
 });
@@ -195,5 +197,25 @@ describe("a question about a whole group hears from the whole group", () => {
     const db = crowd(45);
     const g = gatherEvidence(db, { scope: { terms: ["shop online"], studyIds: [], broad: false }, participants: null, statuses: ["approved"], limit: 30 });
     expect(new Set(g.hits.map((h) => h.participantId)).size).toBe(45); // 30 items at 3 per person would reach only 10 people
+  });
+});
+
+describe("answers never show evidence numbers in their sentences", () => {
+  it("cleans the headline, summary, patterns, conflict and gaps of a written answer", async () => {
+    const db = seed();
+    const ai = new MockProvider((req) => {
+      if (req.system.includes("search over")) return { keywords: ["pinterest"], broad: false, studies: [] };
+      const ids = [...req.prompt.matchAll(/#(\d+) \((P\d+),/g)].map((m) => Number(m[1]));
+      return { headline: "They browse Pinterest first #575, #1824", summary: "Most start from reels #1836, #1994, #2061. Some use wishlists (#12).", coverage: "direct", signals: ids.map((i) => ({ evidence_id: i, signal: "positive" })),
+        patterns: [{ title: "Ideas first #5", summary: "They look for looks before products #575, #2153, #1682.", signal: "strong", label: "evidence", evidence_ids: ids.slice(0, 5) }],
+        conflict: { title: "Some disagree", body: "A few prefer stores #7.", evidence_ids: ids.slice(0, 1) }, unknowns: [{ title: "Gifts", body: "Nothing on gifts [3, 4]." }], implications: imps };
+    });
+    const a = await answerQuestion(db, ai, { question: "do they use pinterest?", audience: [], now: new Date("2026-11-10") });
+    expect(a.headline).toBe("They browse Pinterest first");
+    expect(a.summary).toBe("Most start from reels. Some use wishlists.");
+    expect(a.patterns[0]).toMatchObject({ title: "Ideas first", summary: "They look for looks before products." });
+    expect(a.conflict?.body).toBe("A few prefer stores.");
+    expect(a.unknowns[0]!.body).toBe("Nothing on gifts.");
+    expect(a.patterns[0]!.evidenceIds.length).toBeGreaterThan(0); // the citations themselves are untouched
   });
 });

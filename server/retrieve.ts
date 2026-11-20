@@ -72,6 +72,20 @@ export function gatherEvidence(db: Db, o: { scope: Scope; participants: string[]
 export const evidenceLines = (hits: Hit[], withKind = true) => hits.map((h) => `#${h.id} (${h.participantId}${withKind ? `, ${h.kind}` : ""}${h.provenance === "researcher_note" ? ", researcher note" : ""})${h.overview ? " [overview]" : ""} ${h.translation ?? h.quote}`).join("\n");
 export const overviewNote = (g: Gathered) => g.usedOverview ? `\nOverview of this audience's research, themes by number of participants (computed, not opinion): ${g.themes.map((t) => `${t.theme} (${t.participants})`).join("; ")}\nItems marked [overview] are a general sample of that research, not matched to the question. For broad questions, summarise the recurring themes they show and cite them; do not over-claim from a handful.\n` : "";
 
-/** Evidence numbers belong in the citations, not in the sentence. Removes things like "[468, 505]" or "(#12)" if a model writes them anyway. */
+/** Evidence numbers belong in the citations, not in the sentence. Removes things like "[468, 505]", "(#12)" or "#575, #1824" if a model writes them anyway. */
 export const stripEvidenceMarkers = (text: string) =>
-  text.replace(/\s*[\[(]\s*#?\d+(?:\s*[,;]\s*#?\d+)*\s*[\])]/g, "").replace(/\s+#\d+\b/g, "").replace(/\s{2,}/g, " ").replace(/\s+([.,;!?])/g, "$1").trim();
+  text.replace(/\s*[\[(]\s*#?\d+(?:\s*[,;]\s*#?\d+)*\s*[\])]/g, "")
+    .replace(/(?:\s*(?:,|;|and|&)\s*)?\s#\d+(?:\s*(?:,|;|and|&)\s*#\d+)*/g, "")
+    .replace(/^#\d+(?:\s*(?:,|;|and|&)\s*#\d+)*\s*/, "")
+    .replace(/\s{2,}/g, " ").replace(/\s+([.,;!?])/g, "$1").replace(/,\s*([.!?])/g, "$1").trim();
+
+/** The same, for every piece of text in a reply (ids are numbers, so they are not touched). Only used on written answers, never on quotes. */
+export function stripDeep<T>(v: T): T {
+  if (typeof v === "string") return stripEvidenceMarkers(v) as T;
+  if (Array.isArray(v)) return v.map((x) => stripDeep(x)) as T;
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, stripDeep(x)])) as T;
+  return v;
+}
+
+/** Said once in every prompt that writes prose about evidence. */
+export const NO_NUMBERS = "Never write evidence numbers in any text (nothing like #12, [12] or (12)); the numbers belong only in the evidence_ids lists.";

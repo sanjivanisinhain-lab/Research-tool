@@ -3,6 +3,7 @@ import { audit, type Db } from "../db";
 import type { AiProvider } from "./provider";
 import { audienceParticipants, emptyImps } from "./shared";
 import { confidenceLabel } from "../../src/config/confidence";
+import { stripDeep, NO_NUMBERS } from "../retrieve";
 import { searchEvidence } from "../search";
 import type { Answer, AudienceRef, ScriptQuestion } from "../../src/types/research";
 
@@ -43,8 +44,8 @@ export async function reviewScript(db: Db, ai: AiProvider, o: ScriptOpts): Promi
   const members = audienceParticipants(db, o.audience);
   const phrases = (db.prepare(`SELECT e.original_text q FROM evidence e WHERE e.provenance='participant_verbatim' AND e.status IN (${statuses.map(() => "?").join(",")}) ORDER BY e.id LIMIT 400`).all(...statuses) as { q: string }[])
     .map((r) => r.q).filter((q, i) => i % 8 === 0).slice(0, 12).filter((q) => q.length < 140);
-  const raw = await ai.generateJson<Raw>({ system: SYS, schema: SCHEMA,
-    prompt: `Audience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\nPhrases this audience has used (for wording only):\n${phrases.map((p) => `- ${p}`).join("\n") || "(none)"}\n\nScript:\n${o.script.slice(0, 30000)}` });
+  const raw = stripDeep(await ai.generateJson<Raw>({ system: SYS, schema: SCHEMA,
+    prompt: `Audience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\nPhrases this audience has used (for wording only):\n${phrases.map((p) => `- ${p}`).join("\n") || "(none)"}\n\nScript:\n${o.script.slice(0, 30000)}` }));
 
   const scriptNorm = norm(o.script);
   const questions: ScriptQuestion[] = []; let n = 0;

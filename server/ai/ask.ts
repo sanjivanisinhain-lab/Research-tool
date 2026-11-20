@@ -8,7 +8,7 @@ import { attachmentsText, looksLikeScript } from "../attachments";
 import { reviewScript } from "./script";
 import { planStudy, wantsStudyPlan } from "./plan";
 import { ftsQuery, searchEvidence, type Hit } from "../search";
-import { evidenceLines, gatherEvidence, overviewNote, searchScope, stripEvidenceMarkers, type Gathered, type Scope } from "../retrieve";
+import { evidenceLines, gatherEvidence, NO_NUMBERS, overviewNote, searchScope, stripDeep, stripEvidenceMarkers, type Gathered, type Scope } from "../retrieve";
 import type { Answer, Attachment, AudienceRef, ClaimLabel, ComparisonColumn, FollowUp, Implications, Pattern, Role } from "../../src/types/research";
 
 
@@ -26,7 +26,8 @@ const SYS_ANSWER = `You answer a product team's question about a user audience u
 - headline: a direct answer in under 12 words. It MUST agree with your own signals: if most relevant participants signal negative, the headline says the likely reaction is negative (and vice versa); only say "mixed" if the signals are genuinely split. summary: 1-3 sentences, also consistent with the signals. Quote nothing yourself; quotes are shown separately.
 - Items marked [overview] are a general sample of the audience's research, not matched to your question: use them for broad questions (typical behaviour, habits) by summarising the recurring themes they show; for a specific question they are not evidence unless they actually address it.
 - coverage: "direct" if some of the evidence is about the very subject of the question, even when it is incomplete (gaps belong under unknowns, not here). "general" ONLY if none of the evidence is about that subject and you can only offer related background (for example the question is about gift buying and the evidence is about shopping habits in general). When "general", coverage_note is one plain sentence saying what the research does not cover.
-- Be tentative when the evidence is thin.`;
+- Be tentative when the evidence is thin.
+- ${NO_NUMBERS}`;
 
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };
 const SCHEMA_ANSWER = { type: "OBJECT", properties: {
@@ -71,8 +72,8 @@ async function assessAudience(db: Db, ai: AiProvider, o: { question: string; sco
     return { raw: { headline: "", summary: "", signals: [], patterns: [], unknowns: [], implications: emptyImps() }, conf, confidence: toConfidence(conf), patterns: [], evidenceStances: {}, sources: 0, implications: emptyImps(), empty: true, direct: 0 };
   }
   const byId = new Map(hits.map((h) => [h.id, h]));
-  const raw = await ai.generateJson<Raw>({ system: SYS_ANSWER, schema: SCHEMA_ANSWER,
-    prompt: `${o.context ? o.context + "\n" : ""}Question: ${o.question}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` });
+  const raw = stripDeep(await ai.generateJson<Raw>({ system: SYS_ANSWER, schema: SCHEMA_ANSWER,
+    prompt: `${o.context ? o.context + "\n" : ""}Question: ${o.question}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\n${overviewNote(gathered)}\nEvidence:\n${evidenceLines(hits)}` }));
   // Integrity: only signals on retrieved evidence count; confidence is computed here, not by the model.
   const seen = new Set<number>();
   const items = (raw.signals ?? []).filter((x) => byId.has(x.evidence_id) && !seen.has(x.evidence_id) && seen.add(x.evidence_id))
@@ -80,8 +81,8 @@ async function assessAudience(db: Db, ai: AiProvider, o: { question: string; sco
   const conf = computeConfidence(items, o.now);
   // Consistency guard: the headline must not contradict the computed direction (e.g. "mixed" while 92% point one way).
   if (conf.direction && conf.direction.label !== "Mixed" && /\b(mixed|split|divided|varied|ambivalent)\b/i.test(raw.headline)) {
-    const fix = await ai.generateJson<{ headline: string; summary: string }>({ system: SYS_REWRITE, schema: SCHEMA_REWRITE,
-      prompt: `Computed finding: ${conf.direction.pct}% of ${conf.participants} relevant participants point toward a ${conf.direction.label.toLowerCase()} reaction.\nQuestion: ${o.question}\nDraft headline: ${raw.headline}\nDraft summary: ${raw.summary}` });
+    const fix = stripDeep(await ai.generateJson<{ headline: string; summary: string }>({ system: SYS_REWRITE, schema: SCHEMA_REWRITE,
+      prompt: `Computed finding: ${conf.direction.pct}% of ${conf.participants} relevant participants point toward a ${conf.direction.label.toLowerCase()} reaction.\nQuestion: ${o.question}\nDraft headline: ${raw.headline}\nDraft summary: ${raw.summary}` }));
     if (fix.headline && fix.summary) { raw.headline = fix.headline; raw.summary = fix.summary; }
   }
   const main = conf.direction?.label === "Negative" ? "negative" : "positive";
@@ -180,7 +181,7 @@ export async function compareAudiences(db: Db, ai: AiProvider, opts: AskOpts): P
   } else {
     const payload = audiences.map((aud, i) => `AUDIENCE: ${aud.name} (reaction ${assessed[i].conf.direction?.pct}% ${assessed[i].conf.direction?.label}, confidence ${assessed[i].confidence.score}, ${assessed[i].confidence.participants} participants)\n` +
       assessed[i].patterns.map((p) => `- [${p.signal}] ${p.title}: ${p.summary}`).join("\n")).join("\n\n");
-    const raw = await ai.generateJson<CompareRaw>({ system: SYS_COMPARE, schema: SCHEMA_COMPARE, prompt: `Question: ${opts.question}\n\n${payload}` });
+    const raw = stripDeep(await ai.generateJson<CompareRaw>({ system: SYS_COMPARE, schema: SCHEMA_COMPARE, prompt: `Question: ${opts.question}\n\n${payload}` }));
     const names = audiences.map((a) => a.name);
     columns.forEach((col, i) => {
       const dims = (raw.dimensions ?? []).map((d) => { const m = d.per_audience.find((x) => x.audience === names[i]); return m ? { name: d.name, signal: m.signal, summary: m.summary } : null; }).filter((d): d is NonNullable<typeof d> => !!d);

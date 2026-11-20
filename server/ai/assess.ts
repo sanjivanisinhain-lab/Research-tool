@@ -5,6 +5,7 @@ import { audit, type Db } from "../db";
 import type { AiProvider } from "./provider";
 import { computeConfidence, type Signal } from "../confidence";
 import { searchEvidence, type Hit } from "../search";
+import { stripDeep, NO_NUMBERS } from "../retrieve";
 import { audienceParticipants, emptyImps, mainSignal, ROLES } from "./shared";
 import type { Annotation, Assessment, AudienceRef, Implications, Signal as UiSignal } from "../../src/types/research";
 
@@ -22,7 +23,8 @@ const SYS_ASSESS = `You predict how a user audience is likely to react to elemen
 - "signals": for each evidence item you relied on, whether that participant's evidence points toward a positive, negative or neutral reaction to this design for the task.
 - headline: under 12 words, agrees with your own signals. summary: 1-3 sentences, tentative if evidence is thin. conflict: evidence that contradicts the main conclusion (cite numbers) or null. unknowns: what the evidence cannot tell us about this design.
 - implications: for each role, keep / change / watch (short).
-This is a prediction from existing research, not a test result.`;
+This is a prediction from existing research, not a test result.
+${NO_NUMBERS}`;
 const imp = { type: "OBJECT", properties: { keep: { type: "STRING" }, change: { type: "STRING" }, watch: { type: "STRING" } }, required: ["keep", "change", "watch"] };
 const SCHEMA_ASSESS = { type: "OBJECT", properties: {
   headline: { type: "STRING" }, summary: { type: "STRING" },
@@ -79,7 +81,7 @@ export async function assessDesign(db: Db, ai: AiProvider, o: AssessInput): Prom
 
   if (pool.size) {
     const block = elements.map((el, i) => `ELEMENT ${i + 1}: ${el.title} (${el.description}${o.images.length > 1 ? `; on screen ${el.screen + 1}` : ""})\n` + (perElement[i].length ? perElement[i].map((h) => `  #${h.id} (${h.participantId}, ${h.kind}) ${h.translation ?? h.quote}`).join("\n") : "  (no evidence found)")).join("\n\n");
-    const raw = await ai.generateJson<Assessed>({ system: SYS_ASSESS, schema: SCHEMA_ASSESS, prompt: `Task: ${o.task}${o.goal ? `\nGoal: ${o.goal}` : ""}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\nDesign: ${look.design_summary}\n\n${block}` });
+    const raw = stripDeep(await ai.generateJson<Assessed>({ system: SYS_ASSESS, schema: SCHEMA_ASSESS, prompt: `Task: ${o.task}${o.goal ? `\nGoal: ${o.goal}` : ""}\nAudience: ${o.audience.map((a) => a.name).join(" + ") || "All users"}\nDesign: ${look.design_summary}\n\n${block}` }));
     // Integrity: signals only on retrieved evidence; confidence computed in code.
     const seen = new Set<number>();
     const items = (raw.signals ?? []).filter((s) => pool.has(s.evidence_id) && !seen.has(s.evidence_id) && seen.add(s.evidence_id)).map((s) => ({ participantId: pool.get(s.evidence_id)!.participantId, signal: s.signal, date: pool.get(s.evidence_id)!.date }));
