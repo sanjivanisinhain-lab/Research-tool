@@ -5,7 +5,7 @@ import { ArrowUp, BookOpen, ShieldCheck, Lightbulb } from "lucide-react";
 import { api } from "@/api";
 import { useAudiences, usePersonaConversation } from "@/api/hooks";
 import { PersonaChips } from "@/components/research/PersonaChips";
-import { ClaimTag, ErrorState, Eyebrow, PageHeader } from "@/components/research/primitives";
+import { ClaimTag, ErrorState, PageHeader } from "@/components/research/primitives";
 import { useEvidenceDrawer } from "@/components/research/EvidenceDrawer";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -46,14 +46,8 @@ function PersonaChat() {
     <div>
       <PageHeader eyebrow="Persona conversation" title="Explore a perspective, without pretending it's a person." sub="Responses simulate a behavioural profile grounded in research. Inspect evidence when available." />
       <div className="mb-6"><PersonaChips selected={[pid]} onSelect={(p) => { if (!send.isPending) setPid(p.id); }} /></div>
-      <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-        <div>
-          <Eyebrow className="mb-3">Choose one persona</Eyebrow>
-          <div className="space-y-2">
-            {personas.map((p) => <div key={p.ref.id} className="border-b py-3"><p className="font-semibold">{p.ref.name}</p><p className="text-xs text-muted-foreground">{p.ref.participants} participants · {p.evidenceStrength}% strength</p></div>)}
-          </div>
-          <div className="mt-4 flex gap-3 rounded-2xl bg-unknown-soft p-4 text-sm"><ShieldCheck className="size-4 shrink-0 text-unknown" /><div><p className="font-semibold">Simulation boundary</p><p className="text-muted-foreground">No invented memories or preferences beyond research.</p></div></div>
-        </div>
+      <div className="max-w-4xl">
+        <div className="mb-4 flex gap-3 rounded-2xl bg-unknown-soft p-4 text-sm"><ShieldCheck className="size-4 shrink-0 text-unknown" /><div><p className="font-semibold">Simulation boundary</p><p className="text-muted-foreground">No invented memories or preferences beyond research.</p></div></div>
         <div className="flex min-h-[560px] flex-col rounded-3xl border bg-card">
           <div className="flex items-center justify-between border-b px-5 py-4">
             <div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-full bg-persona-soft font-display font-semibold text-persona">{current.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span><div><p className="font-semibold">{current.name}</p><p className="text-xs text-muted-foreground">Research-derived composite · Evidence mode</p></div></div>
