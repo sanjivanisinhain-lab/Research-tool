@@ -96,10 +96,24 @@ export class MockProvider implements AiProvider {
   async generateJsonWithMedia<T>(req: JsonRequest, media: Media[]): Promise<T> { this.calls++; this.media.push(media); return this.responder(req) as T; }
 }
 
-/** AI_PROVIDER=claude (or an AI_API_KEY with no Gemini key) uses Claude through ./chat; otherwise Gemini. */
+/** Claude for text and pictures, Gemini for audio and video (Claude cannot read those). Used when AI_PROVIDER=claude and a Gemini key is also set. */
+export class HybridProvider implements AiProvider {
+  readonly name: string; readonly model: string;
+  constructor(private text: AiProvider, private audio: AiProvider) { this.name = text.name; this.model = text.model; }
+  generateJson<T>(req: JsonRequest): Promise<T> { return this.text.generateJson<T>(req); }
+  generateJsonWithMedia<T>(req: JsonRequest, media: Media[]): Promise<T> {
+    return (media.every((m) => m.mimeType.startsWith("image/")) ? this.text : this.audio).generateJsonWithMedia<T>(req, media);
+  }
+}
+
+/** AI_PROVIDER=claude (or an AI_API_KEY/ANTHROPIC_API_KEY with no Gemini key) uses Claude through ./chat; with a Gemini key as well, audio and video still go to Gemini. Otherwise Gemini. */
 export function providerFromEnv(): AiProvider {
-  const useClaude = process.env["AI_PROVIDER"] === "claude" || (!!(process.env["AI_API_KEY"] || process.env["ANTHROPIC_API_KEY"]) && !process.env["GEMINI_API_KEY"] && process.env["AI_PROVIDER"] !== "gemini");
-  if (useClaude) return chatProviderFromEnv();
+  const claudeKey = !!(process.env["AI_API_KEY"] || process.env["ANTHROPIC_API_KEY"]);
+  const useClaude = process.env["AI_PROVIDER"] === "claude" || (claudeKey && !process.env["GEMINI_API_KEY"] && process.env["AI_PROVIDER"] !== "gemini");
+  if (useClaude) {
+    const claude = chatProviderFromEnv();
+    return process.env.GEMINI_API_KEY ? new HybridProvider(claude, new GeminiProvider(process.env.GEMINI_API_KEY)) : claude;
+  }
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set (put it in .env, never in code)");
   return new GeminiProvider(key);

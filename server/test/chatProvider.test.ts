@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatProvider, parseJsonText, toJsonSchema, chatProviderFromEnv } from "../ai/chat";
-import { GeminiError } from "../ai/provider";
+import { GeminiError, HybridProvider, MockProvider } from "../ai/provider";
 
 const schema = { type: "OBJECT", properties: { ok: { type: "BOOLEAN" }, x: { type: "OBJECT", nullable: true, properties: {} } }, required: ["ok"] };
 const okJson = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
@@ -59,5 +59,13 @@ describe("Claude provider", () => {
     const g = chatProviderFromEnv({ ANTHROPIC_API_KEY: "k", ANTHROPIC_BASE_URL: "https://saarthi-gw.example/" }) as any; // what a company gateway hands out
     expect(g.o).toMatchObject({ format: "anthropic", baseUrl: "https://saarthi-gw.example/" });
     expect(g.model).toBe("claude-sonnet-5-5");
+  });
+  it("hybrid: text and pictures go to Claude, audio and video to Gemini", async () => {
+    const c = new MockProvider(() => ({ from: "claude" })), g = new MockProvider(() => ({ from: "gemini" }));
+    const h = new HybridProvider(c, g);
+    expect(await h.generateJson({ system: "", prompt: "", schema })).toEqual({ from: "claude" });
+    expect(await h.generateJsonWithMedia({ system: "", prompt: "", schema }, [{ mimeType: "image/png", data: Buffer.from("a") }])).toEqual({ from: "claude" });
+    expect(await h.generateJsonWithMedia({ system: "", prompt: "", schema }, [{ mimeType: "audio/mpeg", data: Buffer.from("a") }])).toEqual({ from: "gemini" });
+    expect(await h.generateJsonWithMedia({ system: "", prompt: "", schema }, [{ mimeType: "video/mp4", data: Buffer.from("a") }])).toEqual({ from: "gemini" });
   });
 });
