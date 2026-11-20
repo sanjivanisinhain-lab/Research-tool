@@ -82,14 +82,15 @@ function SheetPage() {
 const LONG = 400;
 /** Splits text around the quoted words so they can be marked. */
 function Highlighted({ text, quote }: { text: string; quote: string | null }) {
-  const at = quote ? text.indexOf(quote) : -1;
-  if (!quote || at < 0) return <span className="whitespace-pre-wrap">{text}</span>;
-  return <span className="whitespace-pre-wrap">{text.slice(0, at)}<mark id="cited-quote" className="rounded bg-brand-soft px-0.5 ring-1 ring-brand">{quote}</mark>{text.slice(at + quote.length)}</span>;
+  // The quote was stored with its spaces tidied, the cell may have line breaks: match across any run of spaces.
+  const m = quote ? new RegExp(quote.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")).exec(text) : null;
+  if (!quote || !m) return <span className="whitespace-pre-wrap">{text}</span>;
+  return <span className="whitespace-pre-wrap">{text.slice(0, m.index)}<mark id="cited-quote" className="rounded bg-brand-soft px-0.5 ring-1 ring-brand">{m[0]}</mark>{text.slice(m.index + m[0].length)}</span>;
 }
 
 function RowDetails({ d }: { d: SheetRowDetail }) {
   useEffect(() => { document.getElementById("cited-quote")?.scrollIntoView({ block: "center" }); }, [d.row, d.quote]);
-  const found = !!d.quote && d.cells.some((c) => c.includes(d.quote!));
+  const found = !!d.quote && d.cells.some((c) => new RegExp(d.quote!.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")).test(c));
   return (
     <section aria-label={`Row ${d.row} in full`} className="mt-6 rounded-2xl border bg-card p-6">
       <p className="eyebrow">Row {d.row}{d.externalId ? ` · ${d.externalId}` : ""}{d.participantId ? ` · participant ${d.participantId}` : ""}</p>

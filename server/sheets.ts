@@ -242,7 +242,8 @@ export function sheetRow(db: Db, linkId: string, o: { tab: string; row: number; 
   let quote: string | null = null;
   if (o.evidenceId) {
     const ev = db.prepare("SELECT original_text q, source_id sid FROM evidence WHERE id=?").get(o.evidenceId) as { q: string; sid: string } | undefined;
-    if (ev && (ev.sid === r.s1 || ev.sid === r.s2)) quote = ev.q;
+    const cells = (JSON.parse(r.c) as string[]).join(" ");
+    if (ev && (ev.sid === r.s1 || ev.sid === r.s2 || squash(cells).includes(squash(ev.q)))) quote = ev.q; // the row's own evidence, or an earlier upload of the same words
   }
   return { header: JSON.parse(t.header_json), cells: JSON.parse(r.c), row: o.row, tab: o.tab, removed: r.s === "removed", participantId: r.p, externalId: r.e, quote };
 }
@@ -256,6 +257,40 @@ export function sheetRefs(db: Db, sourceIds: string[]): Map<string, { linkId: st
   const q = (col: "source_id" | "source2_id") => db.prepare(`SELECT r.${col} sid, r.link_id lid, l.name, r.tab, r.row_number n, r.state s FROM sheet_rows r JOIN sheet_links l ON l.id=r.link_id WHERE r.${col} IN (${ph})`).all(...sourceIds) as R[];
   const rows = [...q("source_id"), ...q("source2_id")].sort((a, b) => (a.s === "live" ? 0 : 1) - (b.s === "live" ? 0 : 1));
   for (const r of rows) if (!out.has(r.sid)) out.set(r.sid, { linkId: r.lid, name: r.name, tab: r.tab, row: r.n, removed: r.s === "removed" });
+  return out;
+}
+
+// ---------- earlier uploads that came from a sheet row ----------
+const squash = (t: string) => t.replace(/\s+/g, " ").trim();
+type RowText = { linkId: string; name: string; tab: string; row: number; text: string };
+let rowTextCache: { key: string; rows: RowText[]; bySource: Map<string, { linkId: string; name: string; tab: string; row: number; removed: boolean } | null> } | null = null;
+
+/** The redacted text of every live sheet row, kept in memory until the sheets change. */
+function liveRows(db: Db): { rows: RowText[]; bySource: Map<string, { linkId: string; name: string; tab: string; row: number; removed: boolean } | null> } {
+  const k = db.prepare("SELECT COUNT(*) n, COALESCE(MAX(updated_at),'') u FROM sheet_rows WHERE state='live'").get() as { n: number; u: string };
+  const key = `${k.n}|${k.u}`;
+  if (rowTextCache?.key === key) return rowTextCache;
+  const rows = (db.prepare("SELECT r.cells_json c, r.link_id lid, l.name, r.tab, r.row_number n FROM sheet_rows r JOIN sheet_links l ON l.id=r.link_id WHERE r.state='live'").all() as { c: string; lid: string; name: string; tab: string; n: number }[])
+    .map((r) => ({ linkId: r.lid, name: r.name, tab: r.tab, row: r.n, text: squash((JSON.parse(r.c) as string[]).join(" ")) }));
+  rowTextCache = { key, rows, bySource: new Map() };
+  return rowTextCache;
+}
+
+/** Evidence that was read from an earlier upload of the same interview or notes has no row of its own. Find the sheet row that holds the same words, by the evidence's own quotes. Returns nothing rather than guess when the match is not clear. */
+export function sheetRefsByText(db: Db, sourceIds: string[]): Map<string, { linkId: string; name: string; tab: string; row: number; removed: boolean }> {
+  const out = new Map<string, { linkId: string; name: string; tab: string; row: number; removed: boolean }>();
+  const cache = liveRows(db);
+  if (!cache.rows.length) return out;
+  for (const sid of sourceIds) {
+    if (!cache.bySource.has(sid)) {
+      const quotes = (db.prepare("SELECT DISTINCT original_text q FROM evidence WHERE source_id=? AND LENGTH(original_text)>=25 ORDER BY LENGTH(original_text) DESC LIMIT 6").all(sid) as { q: string }[]).map((x) => squash(x.q));
+      const score = cache.rows.map((r) => ({ r, n: quotes.filter((q) => r.text.includes(q)).length })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n);
+      const best = score[0], second = score[1];
+      const clear = !!best && best.n >= Math.min(2, quotes.length) && (!second || second.n < best.n); // enough of its quotes, and no other row does as well
+      cache.bySource.set(sid, clear ? { linkId: best!.r.linkId, name: best!.r.name, tab: best!.r.tab, row: best!.r.row, removed: false } : null);
+    }
+    const hit = cache.bySource.get(sid); if (hit) out.set(sid, hit);
+  }
   return out;
 }
 

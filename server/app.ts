@@ -15,7 +15,7 @@ import { GeminiError, interactive, type AiProvider } from "./ai/provider";
 import { answerQuestion, audienceParticipants, compareAudiences, followUp } from "./ai/ask";
 import { assessDesign, screenFile, type ScreenInput } from "./ai/assess";
 import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
-import { createLink, listLinks, sheetRefs, sheetRow, sheetView, syncSheet } from "./sheets";
+import { createLink, listLinks, sheetRefs, sheetRefsByText, sheetRow, sheetView, syncSheet } from "./sheets";
 import { addNamesToTerms } from "./sheetsHub";
 import { cleanFilter, describeFilter, facets, filterId, filterParticipants, isEmptyFilter, type AudienceFilter } from "./attributes";
 import { clearPending, loadPending } from "./sheetsFile";
@@ -376,7 +376,9 @@ export function createApp(db: Db, opts: AppOpts = {}) {
     if (!ids.length) return res.json([]);
     const rows = db.prepare(`SELECT e.id,e.participant_id p,e.original_text q,e.translation tr,e.kind,e.provenance prov,s.id sid,s.title stitle,s.origin,s.quality,st.name study,s.source_type st,s.date d,s.original_language l
       FROM evidence e JOIN sources s ON s.id=e.source_id JOIN studies st ON st.id=s.study_id WHERE e.id IN (${ids.map(() => "?").join(",")}) AND e.status IN (${statuses().map(() => "?").join(",")})`).all(...ids, ...statuses()) as any[];
-    const refs = sheetRefs(db, [...new Set(rows.map((r) => r.sid as string))]);
+    const sids = [...new Set(rows.map((r) => r.sid as string))];
+    const refs = sheetRefs(db, sids);
+    for (const [sid, ref] of sheetRefsByText(db, sids.filter((x) => !refs.has(x)))) refs.set(sid, ref); // an earlier upload of a row's text still opens that row
     const out: EvidenceItem[] = rows.map((r) => {
       const ref = refs.get(r.sid);
       // stance comes from the most recent answer that cited this evidence

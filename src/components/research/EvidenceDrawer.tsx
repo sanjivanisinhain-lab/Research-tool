@@ -71,7 +71,7 @@ function EvidenceDrawer({ ids, isOpen, onClose, tab, setTab }: { ids: string[]; 
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
                 <span className="rounded-md bg-foreground px-2 py-0.5 font-semibold tabular-nums text-background">{e.participantId}</span>
                 <span className="text-muted-foreground">{SOURCE_LABEL[e.sourceType]}</span>
-                <span className="text-muted-foreground">· {new Date(e.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
+                {e.date && !Number.isNaN(Date.parse(e.date)) && <span className="text-muted-foreground">· {new Date(e.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>}
                 <span className={cn("ml-auto rounded-full px-2 py-0.5 font-semibold uppercase tracking-wider", e.kind === "said" ? "bg-secondary" : "bg-brand-soft text-brand")}>
                   {e.kind === "said" ? "Said" : "Did"}
                 </span>
@@ -90,9 +90,16 @@ function EvidenceDrawer({ ids, isOpen, onClose, tab, setTab }: { ids: string[]; 
               </div>
               {e.audio && expandedSource !== e.id && <CxAudioPlayer evidence={e} />}
               <div className="mt-4 flex justify-end">
-                <Button variant="outline" size="sm" className="rounded-full" aria-expanded={expandedSource === e.id} aria-controls={`source-${e.id}`} onClick={() => setExpandedSource((id) => id === e.id ? null : e.id)}>
-                  <ExternalLink className="size-3.5" /> {expandedSource === e.id ? "Close source" : "Open source"}
-                </Button>
+                {e.sheet ? (
+                  // The source lives in the main data hub: go there, to the row, with the cited words marked.
+                  <Button asChild variant="outline" size="sm" className="rounded-full">
+                    <Link to="/sheets/$id" onClick={onClose} params={{ id: e.sheet.linkId }} search={{ tab: e.sheet.tab, row: e.sheet.row, ev: Number(e.id) }}><ExternalLink className="size-3.5" /> Open source</Link>
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" className="rounded-full" aria-expanded={expandedSource === e.id} aria-controls={`source-${e.id}`} onClick={() => setExpandedSource((id) => id === e.id ? null : e.id)}>
+                    <ExternalLink className="size-3.5" /> {expandedSource === e.id ? "Close source" : "Open source"}
+                  </Button>
+                )}
               </div>
               {expandedSource === e.id && <SourceContext evidence={e} onNavigate={onClose} />}
             </article>

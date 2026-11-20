@@ -180,3 +180,36 @@ describe("row details over the API", () => {
     expect((await fetch(`${base}/api/sheets/${made.id}/row?row=2`)).status).toBe(400);
   });
 });
+
+describe("earlier uploads of a row's text still open that row", () => {
+  let server: Server; let base = ""; let g: ReturnType<typeof fake>;
+  beforeEach(() => { g = fake({ "Participant hub": rows() }); server = createApp(db, { auth: { authDisabled: true }, googleSheets: g, termsPath: path.join(dir, "t3.json") }).listen(0); base = `http://127.0.0.1:${(server.address() as any).port}`; });
+  afterEach(() => { server.close(); });
+  const post = (p: string, b: unknown) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
+  const evidenceOf = (sid: string, pid: string, q: string) => Number(db.prepare("INSERT INTO evidence(source_id,participant_id,original_text,kind,provenance,theme,sentiment,status,created_at) VALUES (?,?,?,'said','participant_verbatim','x','neutral','approved','x')").run(sid, pid, q).lastInsertRowid);
+
+  it("finds the sheet row that holds the same words, even when spacing differs, and says nothing when it is not clear", async () => {
+    const made = await (await post("/api/admin/sheets", { url: SID, name: "Hub" })).json();
+    await post(`/api/admin/sheets/${made.id}/sync`, { import: true });
+    // an earlier upload of the same interview (not tied to any row), with evidence quoting it
+    ingestContribution(db, TR1, { kind: "interview", studyName: "Old upload", submittedBy: "research_team", knownNames: ["Asha"] });
+    const old = db.prepare("SELECT id, participant_id p FROM sources WHERE title NOT LIKE '%·%' OR study_id IN (SELECT id FROM studies WHERE name='Old upload')").get() as { id: string; p: string };
+    const e1 = evidenceOf(old.id, old.p, "Pehle reviews dekhti hoon, phir order karti hoon.");
+    const e2 = evidenceOf(old.id, old.p, "delivery late hoti hai to mood off ho jata hai.");
+    const ev = await (await fetch(`${base}/api/evidence?ids=${e1},${e2}`)).json();
+    expect(ev[0].sheet).toMatchObject({ tab: "Participant hub", row: 2, removed: false }); // GZI-01
+    // the quote is marked in that row, although the sheet's text has line breaks where the stored quote has spaces
+    const d = await (await fetch(`${base}/api/sheets/${made.id}/row?tab=Participant%20hub&row=2&evidence=${e1}`)).json();
+    expect(d.quote).toBe("Pehle reviews dekhti hoon, phir order karti hoon.");
+    // a line that appears in two different rows does not point at either: that would be a guess
+    const SHARED = "Mostly Myntra, aur main reviews dekhti hoon pehle order karne se";
+    g.tabs["Participant hub"]![4]![9] = `${SHARED}. FTU extra detail.`; g.tabs["Participant hub"]![3]![9] = `${SHARED}. CIN extra detail here.`;
+    await post(`/api/admin/sheets/${made.id}/sync`, { force: true });
+    ingestContribution(db, "Totally separate older note, unrelated words only", { kind: "cx_call", studyName: "Old upload", submittedBy: "research_team" });
+    const other = db.prepare("SELECT id, participant_id p FROM sources WHERE id=(SELECT MAX(id) FROM sources)").get() as { id: string; p: string };
+    const shared = evidenceOf(other.id, other.p, SHARED);
+    expect((await (await fetch(`${base}/api/evidence?ids=${shared}`)).json())[0].sheet).toBeUndefined();
+    const unique = evidenceOf(other.id, other.p, "CIN extra detail here");
+    expect((await (await fetch(`${base}/api/evidence?ids=${unique}`)).json())[0].sheet).toBeUndefined(); // too short (under 25 characters) to be trusted as a match on its own
+  });
+});
