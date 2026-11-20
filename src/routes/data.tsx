@@ -216,7 +216,7 @@ function StatusStrip() {
         <span className="flex items-center gap-2">{busy > 0 ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4 text-strong" />}{busy > 0 ? `Working on ${busy} task${busy === 1 ? "" : "s"} (transcribing and reading)` : "AI is idle"}</span>
         <span className="text-muted-foreground">{n("done")} done{n("failed") > 0 && <> · <span className="font-medium text-risk">{n("failed")} failed</span></>}</span>
         {jobs.data && !jobs.data.aiConfigured && <span className="font-medium text-risk">AI key not set: reading is paused</span>}
-        <Button variant="outline" size="sm" className="ml-auto rounded-full" disabled={check.isPending} onClick={() => check.mutate()} title="Sends one tiny request to Gemini and tells you whether it works, and if not, why.">{check.isPending ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Check className="mr-1.5 size-3.5" />}Check Gemini</Button>
+        <Button variant="outline" size="sm" className="ml-auto rounded-full" disabled={check.isPending} onClick={() => check.mutate()} title="Sends one tiny request to the AI service and tells you whether it works, and if not, why.">{check.isPending ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Check className="mr-1.5 size-3.5" />}Check AI</Button>
         <Button variant="outline" size="sm" className="rounded-full" disabled={rebuild.isPending || busy > 0} onClick={() => rebuild.mutate()}>
           <RefreshCw className="mr-1.5 size-3.5" />Rebuild audiences
         </Button>

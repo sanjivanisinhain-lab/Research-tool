@@ -123,12 +123,12 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   });
   /** One tiny call to Gemini, so "is it my key, my quota, or Gemini?" has an answer without reading logs. */
   app.post("/api/admin/ai/check", async (_req, res) => {
-    if (!opts.ai) return res.json({ ok: false, kind: "no_key", message: "No Gemini key is set. Start the app with GEMINI_API_KEY." });
+    if (!opts.ai) return res.json({ ok: false, kind: "no_key", message: "No AI key is set. Start the app with GEMINI_API_KEY (Gemini) or AI_PROVIDER=claude with AI_API_KEY." });
     const t = Date.now();
     try {
       await interactive.run(true, () => opts.ai!.generateJson({ system: "Reply with JSON only.", prompt: "Return {\"ok\": true}", schema: { type: "OBJECT", properties: { ok: { type: "BOOLEAN" } }, required: ["ok"] } }));
       clearAiPause();
-      res.json({ ok: true, ms: Date.now() - t, model: opts.ai.model, message: `Gemini answered in ${((Date.now() - t) / 1000).toFixed(1)} seconds.` });
+      res.json({ ok: true, ms: Date.now() - t, model: opts.ai.model, message: `${opts.ai.name === "claude" ? "Claude" : "Gemini"} answered in ${((Date.now() - t) / 1000).toFixed(1)} seconds.` });
     } catch (e) { res.json({ ok: false, kind: e instanceof GeminiError ? e.kind : "other", message: e instanceof GeminiError ? e.message : "The call failed for an unknown reason.", model: opts.ai.model }); }
   });
   app.post("/api/admin/jobs/rebuild-audiences", (req, res) => {

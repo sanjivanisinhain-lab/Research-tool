@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { chatProviderFromEnv } from "./chat";
 
 export type JsonRequest = { system: string; prompt: string; schema: Record<string, unknown> };
 
@@ -95,7 +96,10 @@ export class MockProvider implements AiProvider {
   async generateJsonWithMedia<T>(req: JsonRequest, media: Media[]): Promise<T> { this.calls++; this.media.push(media); return this.responder(req) as T; }
 }
 
+/** AI_PROVIDER=claude (or an AI_API_KEY with no Gemini key) uses Claude through ./chat; otherwise Gemini. */
 export function providerFromEnv(): AiProvider {
+  const useClaude = process.env["AI_PROVIDER"] === "claude" || (!!process.env["AI_API_KEY"] && !process.env["GEMINI_API_KEY"] && process.env["AI_PROVIDER"] !== "gemini");
+  if (useClaude) return chatProviderFromEnv();
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set (put it in .env, never in code)");
   return new GeminiProvider(key);

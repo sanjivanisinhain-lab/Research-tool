@@ -27,7 +27,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     allowedEmailDomains: (env["ALLOWED_EMAIL_DOMAINS"] ?? "").split(",").map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean),
     setupCode: env["ADMIN_SETUP_CODE"] || undefined,
     rateAiPerHour: num(env["RATE_AI_PER_HOUR"], 60), rateNotesPerHour: num(env["RATE_NOTES_PER_HOUR"], 20),
-    includeUnreviewed: env["ALLOW_UNREVIEWED"] === "1", hasGeminiKey: !!env["GEMINI_API_KEY"], figmaToken: env["FIGMA_TOKEN"] || undefined, sheetSyncMinutes: num(env["SHEET_SYNC_MINUTES"], 10),
+    includeUnreviewed: env["ALLOW_UNREVIEWED"] === "1", hasGeminiKey: !!(env["GEMINI_API_KEY"] || env["AI_API_KEY"]), figmaToken: env["FIGMA_TOKEN"] || undefined, sheetSyncMinutes: num(env["SHEET_SYNC_MINUTES"], 10),
   };
 }
 
@@ -40,7 +40,7 @@ export function securityWarnings(c: Config, userCount: number): string[] {
   if (reachable && !c.cookieSecure) w.push("Listening beyond this machine with COOKIE_SECURE off: sign-in cookies travel unencrypted unless something in front provides https. Serve over https and set COOKIE_SECURE=1.");
   if (c.cookieSecure && c.production) w.push("COOKIE_SECURE is on: the app must be opened over https (or http://localhost) or sign-in will not stick. For plain-http internal use set COOKIE_SECURE=0.");
   if (c.includeUnreviewed) w.push("ALLOW_UNREVIEWED=1: answers include evidence nobody approved.");
-  if (!c.hasGeminiKey) w.push("GEMINI_API_KEY is not set: AI features return 503 and background reading is paused.");
+  if (!c.hasGeminiKey) w.push("No AI key is set (GEMINI_API_KEY, or AI_API_KEY for Claude): AI features return 503 and background reading is paused.");
   if (!c.staticDir && c.production) w.push("No web app build found (STATIC_DIR): only the API will be served.");
   return w;
 }
