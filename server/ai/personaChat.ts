@@ -2,10 +2,11 @@ import crypto from "node:crypto";
 import { audit, type Db } from "../db";
 import type { AiProvider } from "./provider";
 import { ftsQuery } from "../search";
+import { cleanFilter, describeFilter, filterParticipants } from "../attributes";
 import { evidenceLines, gatherEvidence, overviewNote, searchScope, stripEvidenceMarkers } from "../retrieve";
 import type { ChatMessage, ClaimLabel } from "../../src/types/research";
 
-const SYS = `You write a short reply as a PERSON WHO MATCHES a research-derived persona, answering a product team's question. This is a simulation of a behavioural pattern, NOT a real individual.
+const SYS = `You write a short reply as a PERSON WHO MATCHES a research-derived audience (a persona, a group of real people who share something, or people picked by details such as age, city tier or how they pay), answering a product team's question. This is a simulation of a behavioural pattern, NOT a real individual.
 Hard rules:
 - Use ONLY the persona profile and the numbered evidence below. Never use outside knowledge. Never invent personal details (name, age, job, family, city, income, specific past events, dates, prices, quantities). Speak about habits and attitudes that the evidence shows.
 - First person ("I", "people like me", "some of us") is fine, but it must read as a pattern from the research, not a biography.
@@ -17,7 +18,7 @@ Hard rules:
 - Items marked [overview] are a general sample of the persona's research: for broad questions ("how do you usually shop?") speak from the recurring themes they show; for a specific question they do not address, they are not evidence.
 - evidence_ids: the numbers you relied on, from the list ONLY. Never write evidence numbers inside the reply text.`;
 const SCHEMA = { type: "OBJECT", properties: { reply: { type: "STRING" }, label: { type: "STRING", enum: ["evidence", "inference", "no_evidence"] }, evidence_ids: { type: "ARRAY", items: { type: "INTEGER" } }, suggested_study: { type: "STRING" } }, required: ["reply", "label", "evidence_ids"] };
-export type PersonaRow = { id: string; name: string; description: string };
+export type PersonaRow = { id: string; name: string; description: string; kind?: "persona" | "segment" | "custom" };
 type Raw = { reply: string; label: ClaimLabel; evidence_ids: number[]; suggested_study?: string };
 const MIN_PARTICIPANTS = 3;
 
@@ -35,8 +36,21 @@ export function firstSentence(text: string): string {
   return (m ? m[0] : t).trim();
 }
 
+/** Any audience a person can talk to: a persona, a segment, or an audience picked by details. */
 export function latestPersona(db: Db, id: string): PersonaRow | null {
-  return (db.prepare("SELECT p.id, p.name, p.description FROM personas p WHERE p.id=?").get(id) as PersonaRow | undefined) ?? null;
+  const p = db.prepare("SELECT id, name, description FROM personas WHERE id=?").get(id) as PersonaRow | undefined;
+  if (p) return { ...p, kind: "persona" };
+  const g = db.prepare("SELECT id, name, characteristic AS description FROM segments WHERE id=?").get(id) as PersonaRow | undefined;
+  if (g) return { ...g, kind: "segment" };
+  const c = db.prepare("SELECT id, name, filter_json j FROM custom_audiences WHERE id=?").get(id) as { id: string; name: string; j: string } | undefined;
+  return c ? { id: c.id, name: c.name, description: `People who match: ${describeFilter(cleanFilter(JSON.parse(c.j)))}.`, kind: "custom" } : null;
+}
+
+/** Who is in the audience. A picked-by-details audience is whoever matches today. */
+export function membersOfAudience(db: Db, a: PersonaRow): string[] {
+  if (a.kind === "custom") { const row = db.prepare("SELECT filter_json j FROM custom_audiences WHERE id=?").get(a.id) as { j: string } | undefined; return row ? filterParticipants(db, cleanFilter(JSON.parse(row.j))) : []; }
+  const sql = a.kind === "segment" ? "SELECT participant_id p FROM segment_participants WHERE segment_id=?" : "SELECT participant_id p FROM persona_participants WHERE persona_id=?";
+  return (db.prepare(sql).all(a.id) as { p: string }[]).map((r) => r.p);
 }
 
 const toMessage = (r: { id: string; sender: string; text: string; label: ClaimLabel | null; evidence_json: string; suggested_study: string | null }): ChatMessage =>
@@ -50,7 +64,7 @@ export function conversation(db: Db, userId: string, persona: PersonaRow): ChatM
 
 export async function chatWithPersona(db: Db, ai: AiProvider, o: { userId: string; persona: PersonaRow; text: string; includeUnreviewed?: boolean }): Promise<ChatMessage> {
   const statuses = o.includeUnreviewed ? ["approved", "pending"] : ["approved"];
-  const members = (db.prepare("SELECT participant_id p FROM persona_participants WHERE persona_id=?").all(o.persona.id) as { p: string }[]).map((r) => r.p);
+  const members = membersOfAudience(db, o.persona);
   const history = conversation(db, o.userId, o.persona).slice(-6);
   const lastUser = [...history].reverse().find((m) => m.from === "user")?.text;
   const save = (sender: "user" | "persona", text: string, extra: { label?: ClaimLabel; evidenceIds?: string[]; study?: string } = {}) => {

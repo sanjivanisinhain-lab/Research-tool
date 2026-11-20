@@ -5,6 +5,7 @@ import { ArrowUp, BookOpen, ShieldCheck, Lightbulb } from "lucide-react";
 import { api } from "@/api";
 import { useAudiences, usePersonaConversation } from "@/api/hooks";
 import { PersonaChips } from "@/components/research/PersonaChips";
+import { AudiencePickerDialog } from "@/components/research/AudiencePickerDialog";
 import { ClaimTag, ErrorState, PageHeader } from "@/components/research/primitives";
 import { useEvidenceDrawer } from "@/components/research/EvidenceDrawer";
 import { Button } from "@/components/ui/button";
@@ -18,16 +19,18 @@ export const Route = createFileRoute("/persona-chat")({
 });
 
 const SUGGESTED = ["What makes an offer feel genuine?", "How do you react to countdown timers?", "Would you prefer dark mode?"];
-const INTRO = "Ask me what catches my attention or makes me hesitate. I’ll speak from the habits in this persona’s research, without making up personal experiences.";
+const INTRO = "Ask me what catches my attention or makes me hesitate. I’ll speak from the habits in this audience’s research, without making up personal experiences.";
 
 function PersonaChat() {
   const { persona } = Route.useSearch();
   const audiences = useAudiences();
-  const personas = audiences.data?.filter((a) => a.ref.kind === "persona") ?? [];
+  const all = audiences.data ?? [];
+  const personas = all.filter((a) => a.ref.kind === "persona");
   const [chosen, setPid] = useState(persona ?? "deal-driven");
-  // fall back to the first persona when the chosen one doesn't exist (e.g. after audiences were rebuilt)
-  const pid = personas.some((p) => p.ref.id === chosen) ? chosen : (personas[0]?.ref.id ?? chosen);
-  const current = personas.find((p) => p.ref.id === pid)?.ref;
+  const [picker, setPicker] = useState(false);
+  // anyone can be talked to: a persona, a segment, or an audience picked by details. Fall back to the first persona when the choice no longer exists (e.g. after audiences were rebuilt)
+  const pid = all.some((p) => p.ref.id === chosen) ? chosen : (personas[0]?.ref.id ?? all[0]?.ref.id ?? chosen);
+  const current = all.find((p) => p.ref.id === pid)?.ref;
   const q = usePersonaConversation(pid);
   const qc = useQueryClient();
   const drawer = useEvidenceDrawer();
@@ -45,7 +48,12 @@ function PersonaChat() {
   return (
     <div>
       <PageHeader eyebrow="Persona conversation" title="Explore a perspective, without pretending it's a person." sub="Responses simulate a behavioural profile grounded in research. Inspect evidence when available." />
-      <div className="mb-6"><PersonaChips selected={[pid]} onSelect={(p) => { if (!send.isPending) setPid(p.id); }} /></div>
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <PersonaChips selected={[pid]} onSelect={(p) => { if (!send.isPending) setPid(p.id); }} />
+        <Button variant="outline" className="rounded-full" onClick={() => setPicker(true)}>Choose a persona, segment or other audience</Button>
+      </div>
+      {current.kind !== "persona" && <p className="-mt-3 mb-5 text-sm text-muted-foreground">Talking to {current.kind === "segment" ? "a person from the group" : "a person picked by details"}: <strong className="text-foreground">{current.name}</strong> · {current.participants} people behind it</p>}
+      <AudiencePickerDialog open={picker} onOpenChange={setPicker} single title="Who do you want to talk to?" value={[current]} mode="combine" onApply={(v) => { if (v[0] && !send.isPending) setPid(v[0].id); }} />
       <div className="max-w-4xl">
         <div className="mb-4 flex gap-3 rounded-2xl bg-unknown-soft p-4 text-sm"><ShieldCheck className="size-4 shrink-0 text-unknown" /><div><p className="font-semibold">Simulation boundary</p><p className="text-muted-foreground">No invented memories or preferences beyond research.</p></div></div>
         <div className="flex min-h-[560px] flex-col rounded-3xl border bg-card">

@@ -19,12 +19,16 @@ export function AudiencePickerDialog({
   value,
   mode,
   onApply,
+  single = false,
+  title = "Who do you want to understand?",
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   value: AudienceRef[];
   mode: AudienceMode;
   onApply: (v: AudienceRef[], mode: AudienceMode) => void;
+  single?: boolean; // choose exactly one audience (for a conversation), so no combining or comparing
+  title?: string;
 }) {
   const q = useAudiences();
   const [sel, setSel] = useState<AudienceRef[]>(value);
@@ -37,7 +41,7 @@ export function AudiencePickerDialog({
     () => (q.data ?? []).filter((a) => (a.ref.name + a.description).toLowerCase().includes(search.toLowerCase())),
     [q.data, search],
   );
-  const toggle = (r: AudienceRef) => setSel((s) => (s.some((x) => x.id === r.id) ? s.filter((x) => x.id !== r.id) : [...s, r]));
+  const toggle = (r: AudienceRef) => setSel((s) => (single ? [r] : s.some((x) => x.id === r.id) ? s.filter((x) => x.id !== r.id) : [...s, r]));
   const summary = sel.length === 0 ? "No audience selected" : sel.length === 1 ? sel[0]?.name : m === "compare" ? `Comparing ${sel.length} audiences` : `${sel.length} audiences combined`;
 
   const group = (kind: AudienceKind, title: string, right: string) => {
@@ -74,15 +78,15 @@ export function AudiencePickerDialog({
       <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-xl">
         <div className="overflow-y-auto p-6">
           <Eyebrow className="text-brand">Audience</Eyebrow>
-          <DialogTitle className="mt-2 font-display text-2xl">Who do you want to understand?</DialogTitle>
+          <DialogTitle className="mt-2 font-display text-2xl">{title}</DialogTitle>
           <DialogDescription className="sr-only">Choose segments and personas to combine or compare.</DialogDescription>
-          <div role="radiogroup" aria-label="Mode" className="mt-5 grid grid-cols-2 gap-1 rounded-full border bg-secondary p-1">
+          {!single && <div role="radiogroup" aria-label="Mode" className="mt-5 grid grid-cols-2 gap-1 rounded-full border bg-secondary p-1">
             {([["combine", "Combine", "One shared audience"], ["compare", "Compare", "Separate results"]] as const).map(([id, t, s]) => (
               <Button variant="ghost" key={id} role="radio" aria-checked={m === id} onClick={() => setM(id)} className={cn("flex h-auto flex-col gap-0 rounded-full px-3 py-2", m === id ? "bg-card shadow-sm" : "text-muted-foreground")}>
                 <span className="block text-sm font-semibold">{t}</span><span className="block text-xs">{s}</span>
               </Button>
             ))}
-          </div>
+          </div>}
           <div className="relative mt-4">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search segments and personas" aria-label="Search segments and personas" className="h-11 w-full rounded-xl border bg-card pl-9 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
