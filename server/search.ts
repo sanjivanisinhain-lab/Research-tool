@@ -68,6 +68,22 @@ export function overviewEvidence(db: Db, o: { participants?: string[] | null; st
   return { hits, themes: ranked.map(([theme, t]) => ({ theme, participants: t.people.size })) };
 }
 
+/** One representative item for each person in the audience who is not in `skip`: their own words first, and a medium-length quote rather than a fragment. Used so a question about a whole group hears from the whole group. */
+export function onePerPerson(db: Db, o: { participants?: string[] | null; skip: string[]; statuses: string[]; limit: number }): Hit[] {
+  if (o.participants && !o.participants.length) return [];
+  const st = o.statuses.map(() => "?").join(",");
+  const rows = db.prepare(
+    `SELECT id, participantId, sourceId, sourceType, date, language, quote, translation, kind, provenance, theme, sentiment, status, flags FROM (
+       SELECT e.id, e.participant_id AS participantId, e.source_id AS sourceId, s.source_type AS sourceType, s.date, s.original_language AS language,
+              e.original_text AS quote, e.translation, e.kind, e.provenance, COALESCE(e.canonical_theme, e.theme) AS theme, e.sentiment, e.status, e.flags,
+              ROW_NUMBER() OVER (PARTITION BY e.participant_id ORDER BY (e.provenance='participant_verbatim') DESC, ABS(LENGTH(e.original_text) - 140), e.id) AS rn
+       FROM evidence e JOIN sources s ON s.id = e.source_id
+       WHERE e.status IN (${st}) ${o.participants ? "AND e.participant_id IN (SELECT value FROM json_each(?))" : ""} AND e.participant_id NOT IN (SELECT value FROM json_each(?))
+     ) WHERE rn = 1 ORDER BY participantId LIMIT ?`,
+  ).all(...o.statuses, ...(o.participants ? [JSON.stringify(o.participants)] : []), JSON.stringify(o.skip), o.limit) as unknown as Hit[];
+  return rows.map((r) => ({ ...r, overview: true }));
+}
+
 export function participantsOfStudies(db: Db, studyIds: string[]): string[] {
   if (!studyIds.length) return [];
   return (db.prepare(`SELECT id FROM participants WHERE study_id IN (${studyIds.map(() => "?").join(",")})`).all(...studyIds) as { id: string }[]).map((r) => r.id);

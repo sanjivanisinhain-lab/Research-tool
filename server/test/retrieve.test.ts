@@ -6,7 +6,7 @@ import { answerQuestion, followUp } from "../ai/ask";
 import { planStudy } from "../ai/plan";
 import { chatWithPersona, latestPersona } from "../ai/personaChat";
 import { MockProvider } from "../ai/provider";
-import { stripEvidenceMarkers } from "../retrieve";
+import { gatherEvidence, stripEvidenceMarkers } from "../retrieve";
 
 function seed() {
   const db = openDb(":memory:");
@@ -55,7 +55,7 @@ describe("broad questions no longer end in 'no evidence'", () => {
     expect(a.variant).toBe("standard");
     expect(seen.prompt).toContain("[overview]"); expect(seen.prompt).toContain("Pinterest"); expect(seen.prompt).toContain("social inspiration (6)");
     expect(seen.prompt).not.toContain("cash on delivery"); // evidence from the other study is not mixed in
-    expect(a.confidence.participants).toBe(5); // at most 5 voices are sampled per theme
+    expect(a.confidence.participants).toBe(6); // all six Gen Z participants are heard, not just a sample of five
   });
   it("a specific question with no matching words still says 'no evidence' without asking the model to answer", async () => {
     const seen = { prompt: "", calls: 0 };
@@ -161,5 +161,39 @@ describe("a study plan states how much research there really is", () => {
     const own = [{ kind: "persona" as const, id: "PER-1", name: "Browsers", participants: 6 }];
     await planStudy(db, ai, { question: "How should we test outfit ideas from pinterest?", audience: own, scope: { terms: ["pinterest"], studyIds: [], broad: false } });
     expect(prompt).toContain("6 participants in total"); // an audience counts its own members
+  });
+});
+
+describe("a question about a whole group hears from the whole group", () => {
+  function crowd(n: number) {
+    const db = openDb(":memory:");
+    db.exec("INSERT INTO studies VALUES ('SG','Gen Z shopping interviews','Fashion','x'),('SC','Snapdeal CX calls','Snapdeal','x')");
+    for (let i = 1; i <= n; i++) {
+      const p = `G${String(i).padStart(3, "0")}`;
+      db.exec(`INSERT INTO participants VALUES ('${p}','SG','{}','x'); INSERT INTO sources(id,study_id,participant_id,source_type,origin,title,date,created_at) VALUES ('X${p}','SG','${p}','interview','verbatim_transcript','t','2026-10-25','x');`);
+      for (let k = 0; k < 4; k++) db.prepare("INSERT INTO evidence(source_id,participant_id,original_text,translation,kind,provenance,theme,canonical_theme,sentiment,status,created_at) VALUES (?,?,?,?,'did','participant_verbatim',?,?,'neutral','approved','x')").run("X" + p, p, `I like to shop online ${p} ${k}`, `I shop online ${p} ${k}`, ["price", "style", "delivery", "trust"][k], ["price", "style", "delivery", "trust"][k]);
+    }
+    db.exec("INSERT INTO participants VALUES ('C001','SC','{}','x'); INSERT INTO sources(id,study_id,participant_id,source_type,origin,title,created_at) VALUES ('XC','SC','C001','cx_call','researcher_notes','t','x'); INSERT INTO evidence(source_id,participant_id,original_text,kind,provenance,theme,sentiment,status,created_at) VALUES ('XC','C001','cod order late','did','researcher_note','cod','negative','approved','x')");
+    return db;
+  }
+  it("brings in one item for every Gen Z participant, even those whose words do not match, and nobody from another study", () => {
+    const db = crowd(45); const scope = { terms: ["online shopping"], studyIds: ["SG"], broad: true };
+    const g = gatherEvidence(db, { scope, participants: null, statuses: ["approved"], limit: 90 });
+    const people = new Set(g.hits.map((h) => h.participantId));
+    expect(people.size).toBe(45); expect(people.has("C001")).toBe(false);
+    expect(g.hits.length).toBeLessThanOrEqual(150);
+    expect(g.usedOverview).toBe(true);
+    for (const p of people) expect(g.hits.filter((h) => h.participantId === p).length).toBeGreaterThanOrEqual(1);
+  });
+  it("a specific question is not padded with people who have nothing to say about it", () => {
+    const db = crowd(45);
+    const g = gatherEvidence(db, { scope: { terms: ["cod order late"], studyIds: [], broad: false }, participants: null, statuses: ["approved"], limit: 90 });
+    expect([...new Set(g.hits.map((h) => h.participantId))]).toEqual(["C001"]);
+    expect(g.usedOverview).toBe(false);
+  });
+  it("covers everyone with matching words through their best match, beyond the per-person cap", () => {
+    const db = crowd(45);
+    const g = gatherEvidence(db, { scope: { terms: ["shop online"], studyIds: [], broad: false }, participants: null, statuses: ["approved"], limit: 30 });
+    expect(new Set(g.hits.map((h) => h.participantId)).size).toBe(45); // 30 items at 3 per person would reach only 10 people
   });
 });

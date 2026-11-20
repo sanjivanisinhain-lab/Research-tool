@@ -1,7 +1,7 @@
 import type { Db } from "./db";
 import type { AudienceRef } from "../src/types/research";
 import type { AiProvider } from "./ai/provider";
-import { overviewEvidence, participantsOfStudies, searchEvidence, type Hit, type ThemeLine } from "./search";
+import { onePerPerson, overviewEvidence, participantsOfStudies, searchEvidence, type Hit, type ThemeLine } from "./search";
 
 const SYS_INTENT = `You prepare a search over a user-research evidence store (Hindi, Hinglish and English; online shopping in India).
 Return:
@@ -40,16 +40,32 @@ export type Gathered = { hits: Hit[]; themes: ThemeLine[]; usedOverview: boolean
 export const PER_PERSON = 3;
 const ENOUGH = 8; // distinct participants a keyword search should reach before we stop looking
 
-/** Keyword evidence first. For broad questions that found little, add a theme-balanced overview of the audience's research. */
+/** The most items one answer looks at. With the whole research on hand, a group of a few dozen people can each be heard. */
+const TOTAL_CAP = 150;
+
+/**
+ * What an answer looks at. Evidence matching the question's words comes first (a few items per person). Then everyone whose own words match is
+ * brought in through their best match. For a question about a whole group ("how do Gen Z shop?"), the audience's themes are added and every
+ * remaining person with evidence contributes one representative item, so the answer hears from all of them, not just the best-matching few.
+ */
 export function gatherEvidence(db: Db, o: { scope: Scope; participants: string[] | null; statuses: string[]; limit?: number }): Gathered {
   let members = o.participants;
   if (!members && o.scope.studyIds.length) members = participantsOfStudies(db, o.scope.studyIds); // "Gen Z ..." with no audience chosen: look in the Gen Z research
   const keyword = searchEvidence(db, { terms: o.scope.terms, participants: members, statuses: o.statuses, limit: o.limit ?? 40, perParticipant: PER_PERSON });
-  const reached = new Set(keyword.map((h) => h.participantId)).size;
-  if (!(o.scope.broad || o.scope.studyIds.length) || reached >= ENOUGH) return { hits: keyword, themes: [], usedOverview: false };
+  const hits = [...keyword]; const people = () => new Set(hits.map((h) => h.participantId));
+  const room = () => Math.max(0, TOTAL_CAP - hits.length);
+  const ids = new Set(hits.map((h) => h.id));
+  const add = (more: Hit[]) => { for (const h of more) if (!ids.has(h.id) && room() > 0) { ids.add(h.id); hits.push(h); } };
+  // everyone whose words match is heard, through their best match
+  const matching = searchEvidence(db, { terms: o.scope.terms, participants: members, statuses: o.statuses, limit: TOTAL_CAP, perParticipant: 1 });
+  const have = people(); add(matching.filter((h) => !have.has(h.participantId)));
+  const wholeGroup = !!(o.scope.broad || o.scope.studyIds.length);
+  if (!wholeGroup) return { hits, themes: [], usedOverview: false };
   const ov = overviewEvidence(db, { participants: members, statuses: o.statuses, preferStudyIds: o.scope.studyIds });
-  const have = new Set(keyword.map((h) => h.id));
-  return { hits: [...keyword, ...ov.hits.filter((h) => !have.has(h.id))], themes: ov.themes, usedOverview: ov.hits.length > 0 };
+  add(onePerPerson(db, { participants: members, skip: [...people()], statuses: o.statuses, limit: room() })); // breadth first: everyone is heard before anyone is heard twice
+  add(ov.hits); // then the audience's themes, with what room is left
+  const usedOverview = hits.some((h) => h.overview);
+  return { hits, themes: usedOverview ? ov.themes : [], usedOverview };
 }
 
 /** Numbered evidence lines for a prompt; overview samples are marked so the model treats them as general context. */
