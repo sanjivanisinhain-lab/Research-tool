@@ -55,8 +55,9 @@ function people(db: Db) {
     ["P4", { tier: "Tier 2", state: "Rajasthan", payment: "cod" }], // age unknown
     ["P5", { age: 25, tier: "Tier 1", state: "Delhi", payment: "cod" }],
   ];
-  for (const [id, a] of rows) { db.prepare("INSERT INTO participants VALUES (?,?,?,?)").run(id, "S", "{}", "x"); upsertAttributes(db, id, a, "sheet"); }
-  db.exec("INSERT INTO participants VALUES ('P6','S','{}','x')"); // nothing known about this one
+  const src = (id: string) => db.prepare("INSERT INTO sources(id,study_id,participant_id,source_type,origin,title,created_at) VALUES (?,?,?,?,?,?,?)").run("X" + id, "S", id, "cx_call", "researcher_notes", "t", "x");
+  for (const [id, a] of rows) { db.prepare("INSERT INTO participants VALUES (?,?,?,?)").run(id, "S", "{}", "x"); src(id); upsertAttributes(db, id, a, "sheet"); }
+  db.exec("INSERT INTO participants VALUES ('P6','S','{}','x')"); src("P6"); // nothing known about this one
 }
 
 describe("audiences picked by details", () => {

@@ -6,7 +6,7 @@ import { CALL_COLUMNS, ensureStudy, ingestCallRow, loadTerms, saveTerms } from "
 import { makeRedactor } from "./redact";
 import { enqueueExtractions } from "./jobs";
 import { GoogleError, parseSheetUrl, type SheetsClient } from "./google";
-import { applyHub, buildPreview, findOverlaps, hubHeaderIndex, hubTerms, normaliseDate, parseHubTab, planHub, withdrawSources, type HubTab, type Preview } from "./sheetsHub";
+import { applyHub, buildPreview, dedupeAgainstSheets, findOverlaps, hubHeaderIndex, hubTerms, normaliseDate, parseHubTab, planHub, withdrawSources, type HubTab, type Preview } from "./sheetsHub";
 
 const sha = (s: string) => crypto.createHash("sha1").update(s).digest("hex");
 const nowIso = () => new Date().toISOString();
@@ -184,9 +184,10 @@ export async function syncSheet(db: Db, client: SheetsClient, linkId: string, o:
       audit(db, "sheet.sync", { id: linkId, added: r.added, edited: r.edited, removed: r.removed, linked: r.linked, withdrawn: new Set(overlapIds).size });
       db.exec("COMMIT");
     } catch (e) { db.exec("ROLLBACK"); throw e; }
+    if (hubTabs.length) { const d = dedupeAgainstSheets(db); r.message = d.withdrawn ? `${d.withdrawn} earlier upload${d.withdrawn === 1 ? "" : "s"} of the same text withdrawn so nobody is counted twice. ` : ""; } // the sheet is the single source
     enqueueExtractions(db);
     const bits = [r.added && `${r.added} new`, r.edited && `${r.edited} edited`, r.removed && `${r.removed} removed from the sheet`, r.linked && `${r.linked} matched to data already in the tool`, overlapIds.length && `${new Set(overlapIds).size} earlier uploads withdrawn as duplicates`].filter(Boolean);
-    r.message = bits.length ? `Synced: ${bits.join(", ")}.` : "Synced: no changes.";
+    r.message = (r.message ?? "") + (bits.length ? `Synced: ${bits.join(", ")}.` : "Synced: no changes.");
     return finish(r);
   } catch (e) {
     if (e instanceof GoogleError) return finish(result("error", e.message));

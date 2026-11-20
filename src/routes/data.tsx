@@ -59,7 +59,6 @@ function SheetReview({ link, onDone, onMessage }: { link: SheetLinkInfo; onDone:
   const p = link.preview!;
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [manual, setManual] = useState("");
-  const [withdraw, setWithdraw] = useState(true);
   const toggle = (w: string) => setPicked((s) => { const n = new Set(s); if (n.has(w)) n.delete(w); else n.add(w); return n; });
   const names = useMutation({
     mutationFn: (v: { names: string[]; notNames: string[] }) => adminApi.sheetNames(link.id, v.names, v.notNames),
@@ -67,7 +66,7 @@ function SheetReview({ link, onDone, onMessage }: { link: SheetLinkInfo; onDone:
     onError: (e: Error) => onMessage({ ok: false, text: e.message }),
   });
   const run = useMutation({
-    mutationFn: () => adminApi.importSheet(link.id, withdraw),
+    mutationFn: () => adminApi.importSheet(link.id, true),
     onSuccess: (r: SheetSync) => { onMessage({ ok: r.ok, text: r.message + (r.ok ? " When reading finishes, press Rebuild audiences." : "") }); onDone(); },
     onError: (e: Error) => onMessage({ ok: false, text: e.message }),
   });
@@ -88,7 +87,7 @@ function SheetReview({ link, onDone, onMessage }: { link: SheetLinkInfo; onDone:
           <>
             <p className="text-sm text-muted-foreground">{overlapSources} earlier upload{overlapSources === 1 ? "" : "s"} appear to be the same as rows in this sheet. Counting both would count those people twice.</p>
             <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-sm">{p.overlaps.slice(0, 40).map((o, i) => <li key={i} className="tabular-nums"><strong>{o.externalId}</strong> ({o.kind}) matches earlier {o.participantId ?? "upload"} · {o.title} <span className="text-muted-foreground">({o.matched} passages)</span></li>)}</ul>
-            <label className="mt-3 flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={withdraw} onChange={(e) => setWithdraw(e.target.checked)} /><span>Withdraw those {overlapSources} earlier upload{overlapSources === 1 ? "" : "s"} when importing, so the sheet is the only source. They stay in the database, marked as replaced.</span></label>
+            <p className="mt-3 text-sm text-muted-foreground">When you import, those earlier uploads are taken out of answers so nobody is counted twice. They stay in the database, marked as replaced.</p>
           </>
         )}
       </div>

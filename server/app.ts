@@ -349,7 +349,7 @@ export function createApp(db: Db, opts: AppOpts = {}) {
   app.post("/api/audiences/count", (req, res) => {
     const aud = Array.isArray(req.body?.audience) ? (req.body.audience as AudienceRef[]) : [];
     const members = audienceParticipants(db, aud);
-    res.json({ count: members ? members.length : (db.prepare("SELECT COUNT(*) n FROM participants").get() as { n: number }).n });
+    res.json({ count: members ? members.length : (db.prepare("SELECT COUNT(*) n FROM participants p WHERE EXISTS (SELECT 1 FROM sources s WHERE s.participant_id=p.id AND s.status!='rejected')").get() as { n: number }).n });
   });
 
   app.post("/api/answers", aiLimit, big, async (req, res) => {

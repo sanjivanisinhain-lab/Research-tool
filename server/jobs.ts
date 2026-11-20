@@ -1,5 +1,6 @@
 import type { Db } from "./db";
 import { GeminiError, type AiProvider } from "./ai/provider";
+import { dedupeAgainstSheets } from "./sheetsHub";
 import { extractSources, sourceChars, SMALL_SOURCE_CHARS } from "./ai/extract";
 import { canonicaliseThemes } from "./ai/themes";
 import { needsPlainNames, plainNames, synthesise } from "./ai/personas";
@@ -98,6 +99,7 @@ export function startWorker(db: Db, ai: AiProvider | null, intervalMs = 2000, up
   if (uploadsDir) cleanupUploads(db, uploadsDir);
   db.prepare("UPDATE jobs SET status='queued' WHERE status='running'").run();
   enqueueExtractions(db); // pick up anything stored but never queued
+  try { dedupeAgainstSheets(db); } catch (e) { console.warn(`Could not check for duplicates of the research sheet: ${(e as Error).message}`); } // earlier uploads of rows now in the sheet are taken out of answers
   if (!ai) { console.warn("No AI provider: queued jobs will wait until GEMINI_API_KEY is set."); return () => {}; }
   let busy = false; let lastNames = 0; let attrsWaitUntil = 0;
   const unread = () => !!db.prepare("SELECT 1 FROM jobs WHERE kind='extract' AND status IN ('queued','running') LIMIT 1").get();

@@ -116,12 +116,28 @@ describe("a sheet of participants", () => {
     expect(r.preview!.overlaps).toEqual([]);
   });
 
-  it("keeps both when not told to withdraw", async () => {
+  it("takes an earlier upload of the same text out of answers after an import, even if nobody asked at the review", async () => {
     ingestContribution(db, TR1, { kind: "interview", studyName: "Old upload", submittedBy: "research_team", knownNames: ["Asha"] });
     const g = fake({ "Participant hub": rows() }); const id = link();
     await syncSheet(db, g, id, { termsPath: terms });
-    await syncSheet(db, g, id, { termsPath: terms, import: true });
-    expect((db.prepare("SELECT COUNT(*) n FROM sources WHERE status='rejected'").get() as { n: number }).n).toBe(0);
+    const r = await syncSheet(db, g, id, { termsPath: terms, import: true });
+    expect(r.message).toMatch(/1 earlier upload of the same text withdrawn/);
+    expect((db.prepare("SELECT COUNT(*) n FROM sources WHERE status='rejected'").get() as { n: number }).n).toBe(1);
+  });
+  it("finds duplicates that were imported earlier, and is safe to run again", async () => {
+    const g = fake({ "Participant hub": rows() }); const id = link();
+    await syncSheet(db, g, id, { termsPath: terms }); await syncSheet(db, g, id, { termsPath: terms, import: true });
+    // an earlier upload that was added or left behind after the import (nothing withdrew it at the time)
+    ingestContribution(db, TR1, { kind: "interview", studyName: "Old upload", submittedBy: "research_team", knownNames: ["Asha"] });
+    db.exec("INSERT INTO personas(id,run_id,name,description) SELECT 'PER-X', 1, 'p', 'd' WHERE EXISTS (SELECT 1 FROM synthesis_runs)");
+    const { dedupeAgainstSheets } = await import("../sheetsHub");
+    const old = db.prepare("SELECT participant_id p FROM sources WHERE study_id IN (SELECT id FROM studies WHERE name='Old upload')").get() as { p: string };
+    db.exec("INSERT INTO synthesis_runs(created_at,model,includes_unreviewed,evidence_count,participant_count) VALUES ('x','m',0,0,0); INSERT OR IGNORE INTO personas(id,run_id,name,description) VALUES ('PER-Y',1,'p','d')");
+    db.prepare("INSERT INTO persona_participants VALUES ('PER-Y', ?)").run(old.p);
+    expect(dedupeAgainstSheets(db)).toEqual({ withdrawn: 1 });
+    expect(db.prepare("SELECT COUNT(*) n FROM persona_participants WHERE participant_id=?").get(old.p)).toEqual({ n: 0 }); // no longer counted in any audience
+    expect(dedupeAgainstSheets(db)).toEqual({ withdrawn: 0 });
+    expect((db.prepare("SELECT COUNT(*) n FROM sources WHERE status='approved' AND title LIKE '%·%'").get() as { n: number }).n).toBeGreaterThan(0); // the sheet's own sources are untouched
   });
 
   it("follows later edits by Participant ID: only the part that changed is read again; removed rows are flagged", async () => {

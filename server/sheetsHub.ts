@@ -1,7 +1,7 @@
 // Sheets with one row per participant: Participant ID, Study, Data available, Transcript and/or Notes.
 // A row is known by its Participant ID. Each row can carry a transcript, typed notes, or both, and names its own study.
 import crypto from "node:crypto";
-import type { Db } from "./db";
+import { audit, type Db } from "./db";
 import { ingestHubSource, loadTerms, saveTerms, type TermsStore } from "./ingest";
 import { NOT_NAMES } from "./redact";
 import { lookupCity, normaliseAge, normaliseCustomer, normaliseGender, normalisePayment, normaliseState, normaliseTier, upsertAttributes, type Attrs } from "./attributes";
@@ -130,15 +130,17 @@ const probes = (text: string): string[] => {
 };
 export type Overlap = { externalId: string; kind: "transcript" | "notes"; sourceId: string; title: string; participantId: string | null; matched: string };
 
-/** Earlier sources (not tied to a sheet row) whose wording appears in a sheet row: several short stretches must match, so a reformatted copy is still found. */
-export function findOverlaps(db: Db, tabs: HubTab[]): Overlap[] {
+type OverlapPart = { id: string; kind: "transcript" | "notes"; text: string };
+
+/** Earlier sources (not tied to a sheet row) whose wording appears in a piece of sheet text: several short stretches must match, so a reformatted copy is still found. */
+function overlapsOf(db: Db, partsIn: OverlapPart[]): Overlap[] {
   const rows = db.prepare(`SELECT u.source_id sid, u.text t, s.title, s.participant_id p FROM utterances u JOIN sources s ON s.id=u.source_id
     WHERE s.status!='rejected' AND s.id NOT IN (SELECT source_id FROM sheet_rows WHERE source_id IS NOT NULL UNION SELECT source2_id FROM sheet_rows WHERE source2_id IS NOT NULL) ORDER BY u.source_id, u.seq`).all() as { sid: string; t: string; title: string; p: string | null }[];
   const old = new Map<string, { title: string; p: string | null; text: string[] }>();
   for (const r of rows) { const e = old.get(r.sid) ?? { title: r.title, p: r.p, text: [] }; e.text.push(r.t); old.set(r.sid, e); }
   const index = [...old.entries()].map(([sid, e]) => ({ sid, title: e.title, p: e.p, text: norm(e.text.join(" ")) }));
   // A stretch of text that appears in several sheet rows is a scripted question or a shared boilerplate, not evidence that a row is a copy of an earlier upload.
-  const parts = tabs.flatMap((t) => t.rows.flatMap((row) => ([["transcript", row.transcript], ["notes", row.notes]] as const).map(([kind, text]) => ({ id: row.id, kind, ps: probes(text) }))));
+  const parts = partsIn.map((x) => ({ ...x, ps: probes(x.text) }));
   const seen = new Map<string, number>();
   for (const x of parts) for (const p of new Set(x.ps)) seen.set(p, (seen.get(p) ?? 0) + 1);
   const out: Overlap[] = [];
@@ -151,12 +153,43 @@ export function findOverlaps(db: Db, tabs: HubTab[]): Overlap[] {
   return out;
 }
 
+/** Before an import: the rows about to come in. */
+export function findOverlaps(db: Db, tabs: HubTab[]): Overlap[] {
+  return overlapsOf(db, tabs.flatMap((t) => t.rows.flatMap((row) => ([["transcript", row.transcript], ["notes", row.notes]] as const).map(([kind, text]) => ({ id: row.id, kind, text })))));
+}
+
+/**
+ * After an import: the rows already stored. Earlier uploads that hold the same interview or notes are taken out of answers, so the sheet is the single
+ * source and nobody is counted twice. Nothing is deleted: the earlier sources stay in the database, marked as replaced.
+ */
+export function dedupeAgainstSheets(db: Db): { withdrawn: number } {
+  const tabs = db.prepare("SELECT link_id l, tab, header_json h FROM sheet_tabs").all() as { l: string; tab: string; h: string }[];
+  const parts: OverlapPart[] = [];
+  for (const t of tabs) {
+    const keys = (JSON.parse(t.h) as string[]).map((x) => keyOf(x.replace(/\s*\(hidden\)$/, "")));
+    const ti = keys.indexOf("transcript"), ni = keys.indexOf("notes");
+    for (const r of db.prepare("SELECT external_id e, cells_json c FROM sheet_rows WHERE link_id=? AND tab=? AND state='live' AND external_id IS NOT NULL").all(t.l, t.tab) as { e: string; c: string }[]) {
+      const cells = JSON.parse(r.c) as string[];
+      if (ti >= 0 && cells[ti]) parts.push({ id: r.e, kind: "transcript", text: cells[ti]! });
+      if (ni >= 0 && cells[ni] && !/^\(not used/.test(cells[ni]!)) parts.push({ id: r.e, kind: "notes", text: cells[ni]! });
+    }
+  }
+  if (!parts.length) return { withdrawn: 0 };
+  const ids = [...new Set(overlapsOf(db, parts).map((o) => o.sourceId))];
+  if (ids.length) { withdrawSources(db, ids, "Replaced: the same interview or notes are in the research sheet"); audit(db, "sheet.deduped", { withdrawn: ids.length }); }
+  return { withdrawn: ids.length };
+}
+
 /** Take earlier sources out of answers: they stay in the database, marked as replaced. */
 export function withdrawSources(db: Db, sourceIds: string[], note: string) {
   for (const sid of new Set(sourceIds)) {
     db.prepare("UPDATE sources SET status='rejected' WHERE id=?").run(sid);
     db.prepare("UPDATE evidence SET status='rejected', review_note=? WHERE source_id=? AND status!='rejected'").run(note, sid);
   }
+  // A person whose only sources were withdrawn is no longer part of any audience (until audiences are rebuilt they would still be counted).
+  const gone = "participant_id IN (SELECT p.id FROM participants p WHERE NOT EXISTS (SELECT 1 FROM sources s WHERE s.participant_id=p.id AND s.status!='rejected'))";
+  db.prepare(`DELETE FROM segment_participants WHERE ${gone}`).run();
+  db.prepare(`DELETE FROM persona_participants WHERE ${gone}`).run();
 }
 
 // ---------- names that the Name column did not catch ----------

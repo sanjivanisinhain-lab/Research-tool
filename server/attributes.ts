@@ -171,7 +171,7 @@ export type Facets = {
   tiers: { value: string; n: number }[]; states: { value: string; n: number }[]; genders: { value: string; n: number }[]; payments: { value: string; n: number }[]; customers: { value: string; n: number }[];
 };
 export function facets(db: Db): Facets {
-  const total = (db.prepare("SELECT COUNT(*) n FROM participants").get() as { n: number }).n;
+  const total = (db.prepare("SELECT COUNT(*) n FROM participants p WHERE EXISTS (SELECT 1 FROM sources s WHERE s.participant_id=p.id AND s.status!='rejected')").get() as { n: number }).n;
   const count = (col: string) => (db.prepare(`SELECT ${col} v, COUNT(*) n FROM participant_attributes WHERE ${col} IS NOT NULL GROUP BY ${col} ORDER BY n DESC, v`).all() as { v: string; n: number }[]).map((r) => ({ value: r.v, n: r.n }));
   const known = Object.fromEntries(ATTR_KEYS.map((k) => [k, (db.prepare(`SELECT COUNT(*) n FROM participant_attributes WHERE ${k} IS NOT NULL`).get() as { n: number }).n])) as Record<AttrKey, number>;
   const age = db.prepare("SELECT MIN(age) lo, MAX(age) hi FROM participant_attributes WHERE age IS NOT NULL").get() as { lo: number | null; hi: number | null };
