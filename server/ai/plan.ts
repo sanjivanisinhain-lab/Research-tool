@@ -50,7 +50,7 @@ export async function planStudy(db: Db, ai: AiProvider, o: PlanOpts): Promise<An
   const statuses = o.includeUnreviewed ? ["approved", "pending"] : ["approved"];
   const members = audienceParticipants(db, o.audience);
   const subject = o.context ? o.context.question : o.question;
-  const gathered = gatherEvidence(db, { scope: { ...o.scope, terms: [subject, ...o.scope.terms] }, participants: members, statuses, limit: 40 });
+  const gathered = gatherEvidence(db, { scope: { ...o.scope, terms: [subject, ...o.scope.terms] }, participants: members, statuses, limit: 70 });
   const hits = gathered.hits;
   const byId = new Map<number, Hit>(hits.map((h) => [h.id, h]));
   const audienceName = o.audience.map((a) => a.name).join(" + ") || "All users";

@@ -64,7 +64,7 @@ const toConfidence = (c: ReturnType<typeof computeConfidence>): Answer["confiden
 
 /** Retrieve evidence for one audience, have the AI cite and label it, then compute confidence in code and verify every citation. */
 async function assessAudience(db: Db, ai: AiProvider, o: { question: string; scope: Scope; audience: AudienceRef[]; includeUnreviewed?: boolean; now?: Date; gathered?: Gathered; context?: string }): Promise<Assessed> {
-  const gathered = o.gathered ?? gatherEvidence(db, { scope: o.scope, participants: audienceParticipants(db, o.audience), statuses: statusesOf(o), limit: 40 });
+  const gathered = o.gathered ?? gatherEvidence(db, { scope: o.scope, participants: audienceParticipants(db, o.audience), statuses: statusesOf(o), limit: ANSWER_ITEMS });
   const hits = gathered.hits;
   if (!hits.length) {
     const conf = computeConfidence([], o.now);
@@ -107,6 +107,8 @@ function save(db: Db, result: Answer, includeUnreviewed?: boolean) {
 }
 
 const DIRECT_ENOUGH = 3;
+/** How many pieces of evidence one answer looks at. With the whole research on hand, more people are represented than a short list could hold. */
+const ANSWER_ITEMS = 90;
 type Base = Pick<Answer, "id" | "question" | "audience" | "savedAt" | "evidenceStatus"> & { autoAudience?: boolean };
 /** Turn an assessed audience into the answer people see: none, too thin to predict, or a normal answer (with a flag when it is only general background). */
 function composeAnswer(base: Base, a: Assessed): Answer {
@@ -211,11 +213,11 @@ export async function followUp(db: Db, ai: AiProvider, answerId: string, questio
   // Search on the follow-up's own terms first; use the earlier question's context only when the follow-up itself has
   // nothing searchable (e.g. "why?"), and the audience overview when the question is broad and keywords find little.
   const scope: Scope = ftsQuery(sc.terms) ? sc : { ...sc, terms: [answer.question] };
-  let gathered = gatherEvidence(db, { scope, participants: members, statuses, limit: 25 });
+  let gathered = gatherEvidence(db, { scope, participants: members, statuses, limit: ANSWER_ITEMS });
   const own = gathered.hits.filter((h) => !h.overview);
   if (own.length > 0 && own.length < 3) { // a thin result: pad with the earlier question's evidence
-    const more = searchEvidence(db, { terms: [answer.question], participants: members, statuses, limit: 25 }).filter((h) => !gathered.hits.some((o) => o.id === h.id));
-    gathered = { ...gathered, hits: [...gathered.hits, ...more].slice(0, 40) };
+    const more = searchEvidence(db, { terms: [answer.question], participants: members, statuses, limit: 45, perParticipant: 3 }).filter((h) => !gathered.hits.some((o) => o.id === h.id));
+    gathered = { ...gathered, hits: [...gathered.hits, ...more].slice(0, ANSWER_ITEMS) };
   }
   const id = "fu-" + crypto.randomBytes(4).toString("hex");
   const a = await assessAudience(db, ai, { question, scope, audience: answer.audience, includeUnreviewed: !!row.u, now, gathered,

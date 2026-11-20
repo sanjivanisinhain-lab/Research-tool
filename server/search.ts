@@ -15,18 +15,24 @@ export function ftsQuery(terms: string[]): string {
   return [...toks].slice(0, 40).map((w) => `"${w}"`).join(" OR ");
 }
 
-export function searchEvidence(db: Db, opts: { terms: string[]; participants?: string[] | null; statuses: string[]; limit?: number }): Hit[] {
+/** Best matches first. The audience is applied inside the search (so a small group is not crowded out by everyone else's evidence), and `perParticipant` caps how many items one person can fill, so the answer draws on as many different people as possible. */
+export function searchEvidence(db: Db, opts: { terms: string[]; participants?: string[] | null; statuses: string[]; limit?: number; perParticipant?: number }): Hit[] {
   const q = ftsQuery(opts.terms);
   if (!q) return [];
+  const limit = opts.limit ?? 40;
   const st = opts.statuses.map(() => "?").join(",");
+  const members = opts.participants ?? null;
+  if (members && !members.length) return [];
   const rows = db.prepare(
     `SELECT e.id, e.participant_id AS participantId, e.source_id AS sourceId, s.source_type AS sourceType, s.date, s.original_language AS language,
             e.original_text AS quote, e.translation, e.kind, e.provenance, COALESCE(e.canonical_theme, e.theme) AS theme, e.sentiment, e.status, e.flags
      FROM evidence_fts f JOIN evidence e ON e.id = f.rowid JOIN sources s ON s.id = e.source_id
-     WHERE evidence_fts MATCH ? AND e.status IN (${st}) ORDER BY bm25(evidence_fts) LIMIT ?`,
-  ).all(q, ...opts.statuses, (opts.limit ?? 40) * 4) as unknown as Hit[];
-  const allowed = opts.participants ? new Set(opts.participants) : null;
-  return rows.filter((r) => !allowed || allowed.has(r.participantId)).slice(0, opts.limit ?? 40);
+     WHERE evidence_fts MATCH ? AND e.status IN (${st}) ${members ? "AND e.participant_id IN (SELECT value FROM json_each(?))" : ""} ORDER BY bm25(evidence_fts) LIMIT ?`,
+  ).all(q, ...opts.statuses, ...(members ? [JSON.stringify(members)] : []), opts.perParticipant ? limit * 8 : limit) as unknown as Hit[];
+  if (!opts.perParticipant) return rows.slice(0, limit);
+  const seen = new Map<string, number>(); const out: Hit[] = [];
+  for (const r of rows) { const n = seen.get(r.participantId) ?? 0; if (n >= opts.perParticipant) continue; seen.set(r.participantId, n + 1); out.push(r); if (out.length >= limit) break; }
+  return out;
 }
 
 export type ThemeLine = { theme: string; participants: number };

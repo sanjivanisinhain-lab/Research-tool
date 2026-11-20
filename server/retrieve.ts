@@ -36,13 +36,15 @@ function availableAudiences(db: Db): { ref: AudienceRef; size: number }[] {
 }
 
 export type Gathered = { hits: Hit[]; themes: ThemeLine[]; usedOverview: boolean };
+/** No one person fills more than this many of the items an answer looks at, so it draws on as many different people as it can. */
+export const PER_PERSON = 3;
 const ENOUGH = 8; // distinct participants a keyword search should reach before we stop looking
 
 /** Keyword evidence first. For broad questions that found little, add a theme-balanced overview of the audience's research. */
 export function gatherEvidence(db: Db, o: { scope: Scope; participants: string[] | null; statuses: string[]; limit?: number }): Gathered {
   let members = o.participants;
   if (!members && o.scope.studyIds.length) members = participantsOfStudies(db, o.scope.studyIds); // "Gen Z ..." with no audience chosen: look in the Gen Z research
-  const keyword = searchEvidence(db, { terms: o.scope.terms, participants: members, statuses: o.statuses, limit: o.limit ?? 40 });
+  const keyword = searchEvidence(db, { terms: o.scope.terms, participants: members, statuses: o.statuses, limit: o.limit ?? 40, perParticipant: PER_PERSON });
   const reached = new Set(keyword.map((h) => h.participantId)).size;
   if (!(o.scope.broad || o.scope.studyIds.length) || reached >= ENOUGH) return { hits: keyword, themes: [], usedOverview: false };
   const ov = overviewEvidence(db, { participants: members, statuses: o.statuses, preferStudyIds: o.scope.studyIds });

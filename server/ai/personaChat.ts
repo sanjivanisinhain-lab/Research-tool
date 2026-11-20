@@ -62,7 +62,7 @@ export async function chatWithPersona(db: Db, ai: AiProvider, o: { userId: strin
   save("user", o.text);
 
   const sc = await searchScope(db, ai, o.text, lastUser ? `Earlier message: ${lastUser}\n` : "");
-  const gathered = gatherEvidence(db, { scope: { ...sc, terms: ftsQuery(sc.terms) ? sc.terms : [lastUser ?? ""] }, participants: members, statuses, limit: 25 });
+  const gathered = gatherEvidence(db, { scope: { ...sc, terms: ftsQuery(sc.terms) ? sc.terms : [lastUser ?? ""] }, participants: members, statuses, limit: 45 });
   const hits = gathered.hits;
 
   const reply = (rawText: string, label: ClaimLabel, ids: string[], study?: string): ChatMessage => {

@@ -58,7 +58,8 @@ describe("extraction integrity", () => {
   it("helpers", () => {
     expect(isQuotedVerbatim('She said "abc def" ok', "abc def")).toBe(true);
     expect(isQuotedVerbatim('She said "abc def" ok and more', "and more")).toBe(false);
-    const u = [{ id: 1, speaker: "n", text: "a".repeat(5000) }, { id: 2, speaker: "n", text: "b".repeat(5000) }];
-    expect(chunkUtterances(u).length).toBe(2);
+    const u = [{ id: 1, speaker: "n", text: "a".repeat(7000) }, { id: 2, speaker: "n", text: "b".repeat(7000) }];
+    expect(chunkUtterances(u).length).toBe(2); // too big for one call
+    expect(chunkUtterances([u[0]!, { id: 3, speaker: "n", text: "c".repeat(4000) }]).length).toBe(1); // fits in one
   });
 });
