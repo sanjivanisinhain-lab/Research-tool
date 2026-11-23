@@ -68,4 +68,15 @@ describe("Claude provider", () => {
     expect(await h.generateJsonWithMedia({ system: "", prompt: "", schema }, [{ mimeType: "audio/mpeg", data: Buffer.from("a") }])).toEqual({ from: "gemini" });
     expect(await h.generateJsonWithMedia({ system: "", prompt: "", schema }, [{ mimeType: "video/mp4", data: Buffer.from("a") }])).toEqual({ from: "gemini" });
   });
+  it("anthropic style: drops the forced tool call when the model refuses it, and shows the gateway's reason otherwise", async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Thinking may not be enabled when tool_choice forces tool use." } }), { status: 400 }))
+      .mockResolvedValueOnce(okJson({ stop_reason: "end_turn", content: [{ type: "text", text: '{"ok":true}' }] }));
+    vi.stubGlobal("fetch", f);
+    const p = new ChatProvider("k", "m", { format: "anthropic", baseUrl: "https://gw.example" });
+    expect(await p.generateJson({ system: "s", prompt: "p", schema })).toEqual({ ok: true });
+    expect(JSON.parse(String((f.mock.calls[1] as unknown as [string, RequestInit])[1].body)).tool_choice).toBeUndefined();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { message: "max_tokens too large for this model" } }), { status: 400 })));
+    await expect(new ChatProvider("k", "m").generateJson({ system: "", prompt: "", schema })).rejects.toThrow(/max_tokens too large/);
+  });
 });

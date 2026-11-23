@@ -32,6 +32,8 @@ const MAX_OUTPUT = 8192;
 
 export class ChatProvider implements AiProvider {
   readonly name = "claude";
+  private noForcedTool = false; // some models (those that think first) refuse a forced tool call: then the schema goes in the prompt instead
+  private noTemperature = false;
   private noSchemaFormat = false; // some gateways reject response_format: remembered after the first refusal
   constructor(
     private apiKey: string, readonly model: string, private o: { format: ChatFormat; baseUrl: string; mediaModel?: string } = { format: "anthropic", baseUrl: "https://api.anthropic.com" },
@@ -54,9 +56,10 @@ export class ChatProvider implements AiProvider {
     const schema = toJsonSchema(req.schema);
     const temperature = media.length ? 0 : 0.1;
     if (this.o.format === "anthropic") {
+      const content = [...media.map((m) => ({ type: "image", source: { type: "base64", media_type: m.mimeType, data: m.data.toString("base64") } })), { type: "text", text: req.prompt }];
+      if (this.noForcedTool) return JSON.stringify({ model, max_tokens: MAX_OUTPUT, ...(this.noTemperature ? {} : { temperature }), system: `${req.system}\n\nReply with one JSON object only (no other text) that matches this JSON Schema:\n${JSON.stringify(schema)}`, messages: [{ role: "user", content }] });
       return JSON.stringify({
-        model, max_tokens: MAX_OUTPUT, temperature, system: req.system,
-        messages: [{ role: "user", content: [...media.map((m) => ({ type: "image", source: { type: "base64", media_type: m.mimeType, data: m.data.toString("base64") } })), { type: "text", text: req.prompt }] }],
+        model, max_tokens: MAX_OUTPUT, ...(this.noTemperature ? {} : { temperature }), system: req.system, messages: [{ role: "user", content }],
         tools: [{ name: "answer", description: "Give the answer in this exact shape.", input_schema: schema }], tool_choice: { type: "tool", name: "answer" },
       });
     }
@@ -100,6 +103,12 @@ export class ChatProvider implements AiProvider {
       }
       const errText = await res.text().catch(() => ""); // only used to recognise a refused option, never shown or logged
       if (res.status === 400 && this.o.format === "openai" && !this.noSchemaFormat && /response_format|json_schema/i.test(errText)) { this.noSchemaFormat = true; attempt--; continue; }
+      if (res.status === 400) { // the gateway says which option it dislikes: drop that option and ask again (each only once)
+        const msg = (() => { try { const j = JSON.parse(errText); return String(j?.error?.message ?? j?.message ?? j?.detail ?? ""); } catch { return ""; } })();
+        if (this.o.format === "anthropic" && !this.noForcedTool && /tool_choice|thinking|tool use/i.test(msg)) { this.noForcedTool = true; attempt--; continue; }
+        if (this.o.format === "anthropic" && !this.noTemperature && /temperature/i.test(msg)) { this.noTemperature = true; attempt--; continue; }
+        throw new GeminiError(`The AI service refused the request (HTTP 400)${msg ? `: ${msg.slice(0, 240)}` : ""}. Check AI_FORMAT (anthropic or openai) and AI_MODEL.`, "http", 400);
+      }
       if (res.status === 429) { last = new GeminiError("The AI service says too many requests (HTTP 429). It will retry.", "quota_minute", 429); const ra = Number(res.headers.get("retry-after")); await new Promise((r) => setTimeout(r, Number.isFinite(ra) && ra > 0 ? Math.min(ra, 60) * 1000 : delay)); delay = Math.min(delay * 2, 30_000); continue; }
       if ([500, 502, 503, 504, 529].includes(res.status)) { last = new GeminiError(`The AI service is busy or down (HTTP ${res.status})`, "busy", res.status); await new Promise((r) => setTimeout(r, delay)); delay = Math.min(delay * 2, 30_000); continue; }
       if (res.status === 401 || res.status === 403) throw new GeminiError(`The AI service rejected the key (HTTP ${res.status}). Check AI_API_KEY.`, "auth", res.status);
